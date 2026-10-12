@@ -12,7 +12,7 @@
       "name": "fab0",
       "source": "./plugins/fab0",
       "description": "fab0 core: the resolver, the core agents (spec-author, implementer, reviewer) and the /fab0:run and /fab0:inbox skills",
-      "version": "0.2.0",
+      "version": "0.3.0",
       "license": "Apache-2.0"
     }
   ]
