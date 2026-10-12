@@ -43,6 +43,8 @@ import yaml
 PLUGIN_ROOT = Path(__file__).resolve().parent.parent
 SCHEMAS = PLUGIN_ROOT / "schemas"
 
+MANIFEST = PLUGIN_ROOT / ".claude-plugin" / "plugin.json"
+
 EXIT_OK, EXIT_ERROR, EXIT_USAGE, EXIT_INVALID, EXIT_REFUSED = 0, 1, 2, 3, 4
 HARNESS = "claude-code"
 MAX_REWORK = 2  # re-runs after an agent gate's reject; the next reject escalates to a human
@@ -110,6 +112,28 @@ def inline_text(content) -> str | None:
 
 def tail(text: str, lines: int = 20) -> str:
     return "\n".join(text.strip().splitlines()[-lines:])
+
+
+# ---------------------------------------------------------------- version
+
+
+def read_version(manifest: Path | None = None) -> str:
+    """The release of the plugin this resolver belongs to, from its manifest; reads nothing else."""
+    manifest = manifest or MANIFEST
+    try:
+        data = json.loads(manifest.read_text())
+    except OSError as e:
+        raise Fail(EXIT_ERROR, f"cannot read the plugin manifest {manifest}: {e.strerror or e}") from None
+    except ValueError as e:
+        raise Fail(EXIT_ERROR, f"the plugin manifest {manifest} is not valid JSON: {e}") from None
+    version = data.get("version") if isinstance(data, dict) else None
+    if not isinstance(version, str) or not version.strip():
+        raise Fail(EXIT_ERROR, f"the plugin manifest {manifest} has no non-empty string `version`")
+    return version
+
+
+def cmd_version(args) -> dict:
+    return {"ok": True, "fab0_version": read_version()}
 
 
 # ---------------------------------------------------------------- schemas
@@ -1298,6 +1322,8 @@ class Resolver:
             "",
             f'Run {self.run}: {issue["type"]} {self.home.github}#{self.run}, "{issue["title"]}".',
             "",
+            f"Handed out by fab0 {read_version()}.",
+            "",
         ]
         if element:
             lines += [
@@ -1875,6 +1901,8 @@ def cmd_next(args) -> dict:
         path = pending_path(resolver.home, args.run, pending["stage"], pending["task"], pending["kind"] == "gate")
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(pending, indent=2))
+    if result.get("kind") in ("stage", "gate"):
+        result["fab0_version"] = read_version()
     result["workspace"] = workspace(wiring)
     return result
 
@@ -2056,7 +2084,8 @@ def cmd_record(args) -> dict:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="fab0-resolve", description="The fab0 resolver.")
-    sub = parser.add_subparsers(dest="command", required=True)
+    parser.add_argument("--version", action="store_true", help="print the fab0 release of this resolver")
+    sub = parser.add_subparsers(dest="command")
 
     p = sub.add_parser("validate", help="check the project's .fab0/ wiring")
     p.add_argument("--project", help="the home repo (default: found from the current directory)")
@@ -2087,6 +2116,10 @@ def main(argv: list[str] | None = None) -> int:
     p.set_defaults(handler=cmd_inbox)
 
     args = parser.parse_args(argv)
+    if args.version:
+        args.handler = cmd_version
+    elif not args.command:
+        parser.error("a command is required")
     try:
         result, code = args.handler(args), EXIT_OK
     except Fail as fail:

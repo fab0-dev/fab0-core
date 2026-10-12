@@ -9,7 +9,7 @@ fab0 runs software delivery as pipelines of Claude Code agents. The pipelines ar
 | Path | What |
 |---|---|
 | `.claude-plugin/marketplace.json` | The `fab0` marketplace |
-| `plugins/fab0/bin/fab0-resolve` | The resolver. It validates a project's `.fab0/` wiring, computes the next step of a run, records stage results in the run's ledger, and lists what every open run needs (`inbox`) |
+| `plugins/fab0/bin/fab0-resolve` | The resolver. It validates a project's `.fab0/` wiring, computes the next step of a run, records stage results in the run's ledger, and lists what every open run needs (`inbox`). `fab0-resolve --version` prints the plugin's release as JSON; every stage and gate brief names it in its header |
 | `plugins/fab0/schemas/` | JSON Schemas for the wiring files, the core artifact types, agent returns and ledger entries |
 | `plugins/fab0/agents/` | `spec-author` (spec and task list), `implementer` (one task), `reviewer` (the independent gate) |
 | `plugins/fab0/skills/` | `/fab0:run` (the orchestrator), `/fab0:inbox`, and two skills agents load: `spec-format` and `github` |
