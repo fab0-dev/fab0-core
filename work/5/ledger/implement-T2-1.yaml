@@ -1,0 +1,15 @@
+stage: implement
+task: T2
+attempt: 1
+actor: eugenefurs
+model: sonnet
+branch: implement/5-T2-fab0-run-names-the-release-in-each-stage
+inputs:
+  spec: sha256:008eb51d1bf345b04750f7806a9035e5c74a11d09b0af040895d177d903e2780
+  tasks: sha256:ed256d5fa29a26446cf6ce6a4722216b90df60bbb6db29e76ad1b6b40112f42e
+  pr-review: sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945
+outputs: {}
+verify: {}
+gate:
+  type: agent
+summary: 'Edited plugins/fab0/skills/run/SKILL.md. The stage-attempt commit step now uses the subject `<stage>[ <task>] attempt <attempt> (fab0 <fab0_version>): <first line of the summary>`, where `<fab0_version>` is the `fab0_version` field of the `next` result that handed out the attempt (S6). I left the gate commit subject unchanged, since S6 covers stage attempts only. I added no tests and ran no commands: the task is a prose-only skill change and its only file is SKILL.md. T1 (the resolver adding `fab0_version` to results) must be in place for the field to exist.'

@@ -1,0 +1,21 @@
+stage: implement
+task: T2
+attempt: 1
+actor: eugenefurs
+model: opus
+gate:
+  type: agent
+  agent: fab0:reviewer
+  decision: approve
+review:
+  decision: approve
+  reasons:
+  - 'The stage-attempt commit subject in plugins/fab0/skills/run/SKILL.md:43 now matches S6 exactly: `<stage>[ <task>] attempt <attempt> (fab0 <fab0_version>): <first line of the summary>`. Line 41 says where `<fab0_version>` comes from: the `fab0_version` field of the `next` result that handed out the attempt.'
+  - The diff touches only plugins/fab0/skills/run/SKILL.md, the one file the task lists.
+  - 'Nothing contradicts the spec. The gate commit subject is unchanged, and S6 covers stage attempts only. Nothing out of scope was added: no PR bodies, handoff comments, validate, inbox or record output.'
+  - T1 is merged into origin/main, so the `fab0_version` field the skill relies on exists. All 68 core tests pass on the task branch (`uv run pytest -q` at ff8de6b).
+  findings:
+  - check: Tests and checks
+    message: No automated test covers S6. This is a prose change to an orchestrator skill, and the repo has no harness that tests skill text, so S6 can only be confirmed on a real run (working rule 4). Not blocking.
+    location: plugins/fab0/skills/run/SKILL.md:43
+  unmet: []

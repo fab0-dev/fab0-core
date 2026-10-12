@@ -38,9 +38,9 @@ Repeat until a step says stop:
 4. Run `fab0-resolve record <run> <stage> [--task T] --return <file>`.
    - **Exit 4** (refused): show the `violations` and stop. The person decides how to undo them. Then the same `record` can be run again.
    - **`verified: false`**: say so. The next `next` call hands the stage out again with the errors in its brief.
-5. Commit in every repository in `write`:
+5. Commit in every repository in `write`. The subject names the release that handed out this attempt: `<fab0_version>` is the `fab0_version` field of the `next` result from step 1 of the loop, so the stage pull request's commit list shows the release of every attempt:
    ```bash
-   git -C <path> add -A && git -C <path> commit -m "<stage>[ <task>] attempt <attempt>: <first line of the summary>"
+   git -C <path> add -A && git -C <path> commit -m "<stage>[ <task>] attempt <attempt> (fab0 <fab0_version>): <first line of the summary>"
    ```
 6. Update the board (the `fab0:github` skill), then continue the loop.
 
