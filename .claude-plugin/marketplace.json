@@ -1,0 +1,19 @@
+{
+  "name": "fab0",
+  "owner": {
+    "name": "fab0-dev",
+    "url": "https://github.com/fab0-dev"
+  },
+  "metadata": {
+    "description": "fab0: pipelines of Claude Code agents, wired in YAML and carried on GitHub"
+  },
+  "plugins": [
+    {
+      "name": "fab0",
+      "source": "./plugins/fab0",
+      "description": "fab0 core: the resolver, core schemas, and (from the next step) the core agents and skills",
+      "version": "0.1.0",
+      "license": "Apache-2.0"
+    }
+  ]
+}

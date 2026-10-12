@@ -1,0 +1,5 @@
+artifact: tasks
+format: yaml
+location: {repo: home, path: "work/{run}/tasks.yaml"}
+schema: fab0:schemas/tasks.json
+keep: run

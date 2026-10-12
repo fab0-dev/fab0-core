@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "fab0 stage return: the JSON an agent stage returns",
+  "description": "The base schema. A stage's `return:` key adds the optional or required fields listed in $defs.extensions.",
+  "type": "object",
+  "required": ["summary"],
+  "additionalProperties": false,
+  "properties": {
+    "summary": {"type": "string", "minLength": 1}
+  },
+  "$defs": {
+    "extensions": {
+      "questions": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}}
+    }
+  }
+}
