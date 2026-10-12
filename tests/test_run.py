@@ -70,7 +70,7 @@ def test_story_from_spec_to_done(ws):
     res = ws.next("--task", "T1", user="backend-dev")
     assert (res["stage"], res["model"], res["write"], res["repo"]) == ("implement", "sonnet", ["backend"], "backend")
     assert res["branch"] == "implement/412-T1-booking-api-extension"
-    assert "Booking API extension" in res["brief"] and "git -C" in res["brief"]
+    assert "Booking API extension" in res["brief"] and "~~~~markdown" in res["brief"]
     ws.checkout(ws.api, res["branch"], res["start_from"])
     ws.write(ws.api, "src/booking.py", "def extend(booking):\n    return booking\n")
     ws.record("implement", {"summary": "Added extend()."}, task="T1")
@@ -78,6 +78,7 @@ def test_story_from_spec_to_done(ws):
     gate = ws.next("--task", "T1", user="backend-dev")
     assert (gate["kind"], gate["agent"], gate["model"], gate["attempt"]) == ("gate", "fab0:reviewer", "opus", 1)
     assert "implement/412-T1-booking-api-extension" in gate["brief"]
+    assert "':(exclude)work/412/ledger'" in gate["brief"]
 
     # A reject re-runs the producer with the findings.
     rec = ws.record(

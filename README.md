@@ -9,11 +9,12 @@ fab0 runs software delivery as pipelines of Claude Code agents. The pipelines ar
 | Path | What |
 |---|---|
 | `.claude-plugin/marketplace.json` | The `fab0` marketplace |
-| `plugins/fab0/bin/fab0-resolve` | The resolver. It validates a project's `.fab0/` wiring, computes the next stage of a run, and records stage results in the run's ledger |
+| `plugins/fab0/bin/fab0-resolve` | The resolver. It validates a project's `.fab0/` wiring, computes the next step of a run, records stage results in the run's ledger, and lists what every open run needs (`inbox`) |
 | `plugins/fab0/schemas/` | JSON Schemas for the wiring files, the core artifact types, agent returns and ledger entries |
+| `plugins/fab0/agents/` | `spec-author` (spec and task list), `implementer` (one task), `reviewer` (the independent gate) |
+| `plugins/fab0/skills/` | `/fab0:run` (the orchestrator), `/fab0:inbox`, and two skills agents load: `spec-format` and `github` |
 | `tests/` | Fixture-based tests of the resolver |
-
-The core agents and the `/fab0:run` and `/fab0:inbox` skills come in the next step.
+| `scripts/check-agents.py` | Runs each agent headlessly on a fixture brief and checks its reply with the resolver (costs tokens) |
 
 ## Install
 
@@ -22,14 +23,24 @@ The core agents and the `/fab0:run` and `/fab0:inbox` skills come in the next st
 /plugin install fab0@fab0
 ```
 
-`fab0-resolve` then sits on the Bash `PATH` of every Claude Code session. It needs [`uv`](https://docs.astral.sh/uv/) and an authenticated [`gh`](https://cli.github.com/).
+`fab0-resolve` then sits on the Bash `PATH` of every Claude Code session, and `/fab0:run <issue>` and `/fab0:inbox` are available. It needs [`uv`](https://docs.astral.sh/uv/) and an authenticated [`gh`](https://cli.github.com/) with the `project` scope (`gh auth refresh -s project`).
+
+A project is wired by copying a recipe into its `.fab0/` directory; recipes live in `fab0-dev/fab0-recipes`.
 
 ## Develop
 
 ```bash
 uv run pytest
 uv run ruff check
-claude plugin validate .
+claude plugin validate --strict .
+claude plugin validate --strict plugins/fab0/agents
+claude plugin validate --strict plugins/fab0/skills
+```
+
+The agent check runs real Claude Code sessions, so run it by hand when an agent or the brief changes:
+
+```bash
+uv run python scripts/check-agents.py
 ```
 
 ## Licence

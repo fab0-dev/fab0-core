@@ -12,6 +12,7 @@ Commands, each printing one JSON object:
                       runnable tasks, wait, done or blocked
   record RUN STAGE    validate an agent's return, verify the outputs, check the
                       write scope and write the ledger entry
+  inbox               what every open run needs, for one user (read-only)
 
 Exit codes: 0 ok, 1 error, 2 usage, 3 invalid wiring, 4 refused.
 
@@ -33,6 +34,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import urllib.parse
 from pathlib import Path
 
 import jsonschema
@@ -91,6 +93,19 @@ def slugify(text: str, limit: int = 40) -> str:
 
 def quote_block(text: str) -> str:
     return "\n".join("> " + line if line else ">" for line in (text or "(empty)").splitlines())
+
+
+INLINE_LIMIT = 64 * 1024  # text inputs up to this size are put in the brief, so agents need no git to read them
+FENCE_LANG = {"markdown": "markdown", "yaml": "yaml", "json": "json", "gherkin": "gherkin", "openapi": "yaml"}
+
+
+def inline_text(content) -> str | None:
+    if not isinstance(content, bytes) or len(content) > INLINE_LIMIT:
+        return None
+    try:
+        return content.decode()
+    except UnicodeDecodeError:
+        return None
 
 
 def tail(text: str, lines: int = 20) -> str:
@@ -773,6 +788,10 @@ class GhCli:
         prs = (self._pr(d, "headRefName") for d in data if d["headRefName"].startswith(prefix))
         return sorted(prs, key=lambda p: -p["number"])
 
+    def open_issues(self, repo: str, issue_type: str) -> list[dict]:
+        path = f"repos/{repo}/issues?state=open&type={urllib.parse.quote(issue_type)}&per_page=100"
+        return [self._issue(d, repo) for d in self._api(path, True) if "pull_request" not in d]
+
     def reviews(self, repo: str, number: int) -> list[dict]:
         data = self._api(f"repos/{repo}/pulls/{number}/reviews?per_page=100", True)
         return [
@@ -839,6 +858,11 @@ class GhFake:
 
     def prs_prefix(self, repo: str, prefix: str) -> list[dict]:
         return [p for p in self._prs(repo) if p["branch"].startswith(prefix)]
+
+    def open_issues(self, repo: str, issue_type: str) -> list[dict]:
+        refs = [r for r, d in self.data["issues"].items() if r.split("#")[0] == repo and d.get("type") == issue_type]
+        issues = (self._issue(r) for r in refs)
+        return sorted((i for i in issues if i["state"] == "open"), key=lambda i: i["number"])
 
     def reviews(self, repo: str, number: int) -> list[dict]:
         for p in self.data.get("pulls", {}).get(repo, []):
@@ -1244,7 +1268,18 @@ class Resolver:
             else:
                 repo, path = self.art_loc(name, element)
                 src = repo.map_source(self.current_src(name, element))
-                if src[0] == WORKTREE:
+                text = inline_text(repo.read(src, path, art["format"]))
+                if text is not None:
+                    where = "the working tree" if src[0] == WORKTREE else repo.out("rev-parse", repo.ref_for(src))
+                    lines += [
+                        f"- `{name}` ({art['format']}): `{path}` in {repo.name}, at {where}:",
+                        "",
+                        "~~~~" + FENCE_LANG.get(art["format"], ""),
+                        text.rstrip("\n"),
+                        "~~~~",
+                        "",
+                    ]
+                elif src[0] == WORKTREE:
                     lines.append(f"- `{name}` ({art['format']}): `{repo.path / path}`")
                 else:
                     commit = repo.out("rev-parse", repo.ref_for(src))
@@ -1375,7 +1410,13 @@ class Resolver:
             out_repo, path = self.art_loc(name, element)
             lines.append(f"- `{name}`: `{out_repo.path / path}`")
         if entry.get("branch"):
-            lines.append(f"- The changes: `git -C {repo.path} diff {repo.base_ref}...{entry['branch']}`")
+            ledger = f"work/{self.run}/ledger"
+            lines += [
+                f"- The changes: `git -C {repo.path} diff {repo.base_ref}...{entry['branch']} -- . "
+                f"':(exclude){ledger}'`",
+                f"- Files under `{ledger}/` are fab0's own records of the run, not part of the result. "
+                "Leave them out of every check.",
+            ]
         lines += [
             "",
             "## Decide",
@@ -1804,7 +1845,13 @@ def cmd_validate(args) -> dict:
         "pipelines": wiring.project["pipelines"],
         "stages": sorted(wiring.stages),
         "artifacts": sorted(wiring.artifacts),
+        "workspace": workspace(wiring),
     }
+
+
+def workspace(wiring: Wiring) -> dict:
+    repos = (Repo(name, cfg, wiring.root) for name, cfg in wiring.project["repos"].items())
+    return {r.name: {"path": str(r.path), "github": r.github, "exists": r.exists(), "base": r.base} for r in repos}
 
 
 def cmd_next(args) -> dict:
@@ -1828,7 +1875,88 @@ def cmd_next(args) -> dict:
         path = pending_path(resolver.home, args.run, pending["stage"], pending["task"], pending["kind"] == "gate")
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(pending, indent=2))
+    result["workspace"] = workspace(wiring)
     return result
+
+
+def describe_wait(res: dict) -> str:
+    reason = res["reason"]
+    if reason == "human-gate":
+        pr = res.get("pr")
+        where = pr["url"] if pr else "its PR (not opened yet)"
+        return f"{res.get('stage')}: {where} awaits review by {', '.join(res.get('reviewers', []))}"
+    if reason == "questions":
+        return f"{res.get('stage')}: questions for {res.get('owner')}"
+    if reason == "escalated":
+        return f"{res.get('stage')}: the gate escalated to {res.get('owner')}"
+    return res.get("message") or reason
+
+
+def cmd_inbox(args) -> dict:
+    """What each open run needs, from the user's point of view: the same answers `next` gives, without hand-outs."""
+    wiring = load_wiring(args)
+    gh = make_gh()
+    user = args.as_user or gh.user()
+    home = wiring.project["repos"]["home"]["github"]
+    out = {"ready": [], "actions": [], "waiting": [], "blocked": [], "done": []}
+    for name in wiring.project["pipelines"]:
+        issue_type = wiring.pipelines[name]["item"]["issue_type"]
+        for issue in gh.open_issues(home, issue_type):
+            run = str(issue["number"])
+            res = Resolver(wiring, gh, run, user).next(None)
+            item = {"run": run, "type": issue_type, "title": issue["title"]}
+            kind = res["kind"]
+            if kind in ("stage", "gate"):
+                out["ready"].append({**item, "command": f"/fab0:run {run}", "stage": res["stage"]})
+            elif kind == "action":
+                out["actions"].append({**item, "command": f"/fab0:run {run}", "action": res["action"]})
+            elif kind == "tasks" or (kind == "wait" and res["reason"] == "tasks"):
+                for task in res.get("runnable", []):
+                    command = f"/fab0:run {run} --task {task['task']}"
+                    out["ready"].append(
+                        {
+                            **item,
+                            "command": command,
+                            "stage": task["stage"],
+                            "task": task["task"],
+                            "task_title": task["title"],
+                        }
+                    )
+                for task in res.get("others", res.get("tasks", [])):
+                    if task["state"] != "done":
+                        out["waiting"].append(
+                            {
+                                **item,
+                                "task": task["task"],
+                                "task_title": task["title"],
+                                "reason": task.get("detail") or task["state"],
+                            }
+                        )
+            elif (
+                kind == "wait"
+                and res["reason"] == "human-gate"
+                and not res.get("pr")
+                and user in res.get("reviewers", [])
+            ):
+                # Recorded but never pushed: /fab0:run opens the PR.
+                out["ready"].append(
+                    {
+                        **item,
+                        "command": f"/fab0:run {run}",
+                        "stage": res.get("stage"),
+                        "task": res.get("task"),
+                        "note": "open its PR",
+                    }
+                )
+            elif kind == "wait":
+                out["waiting"].append(
+                    {**item, "stage": res.get("stage"), "task": res.get("task"), "reason": describe_wait(res)}
+                )
+            elif kind == "blocked":
+                out["blocked"].append({**item, "reason": res["reason"]})
+            else:
+                out["done"].append(item)
+    return {"ok": True, "user": user, **out}
 
 
 def cmd_record(args) -> dict:
@@ -1951,6 +2079,12 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--return", dest="return_file", required=True, help="a file with the agent's JSON return")
     p.add_argument("--project", help="the home repo (default: found from the current directory)")
     p.set_defaults(handler=cmd_record)
+
+    p = sub.add_parser("inbox", help="what every open run needs, for one user; read-only")
+    p.add_argument("--as", dest="as_user", help="the GitHub user (default: the gh login)")
+    p.add_argument("--profile", help="a profile from fab0.yaml to apply")
+    p.add_argument("--project", help="the home repo (default: found from the current directory)")
+    p.set_defaults(handler=cmd_inbox)
 
     args = parser.parse_args(argv)
     try:
