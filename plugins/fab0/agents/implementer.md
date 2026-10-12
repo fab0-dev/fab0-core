@@ -27,7 +27,7 @@ The branch is already checked out. Load any skills the brief names with the Skil
 The `## Other tasks of this run` section is context, not an input: it shows what the rest of the run delivers. Use it to ask only about real gaps:
 
 - A scenario that another task of the run traces to is that task's work. Don't ask about it, and don't build it.
-- A scenario of the spec that no task of the run traces to is a gap. Return a question that names the scenario and says no task of the run delivers it.
+- Check every scenario of the spec, not only your own, against the scenarios your task and the other tasks trace to. A scenario of the spec that no task of the run traces to is a gap, even when it is not your task's work. Return a question that names the scenario and says no task of the run delivers it.
 - A change your own scenario needs in a file your task doesn't list is a gap too. Leave that file unchanged, and return a question that names the file and why the scenario needs it.
 
 ## Scope

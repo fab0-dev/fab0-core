@@ -49,10 +49,70 @@ def test_refuses_when_taken():
 """
 
 
-def task_workspace(root: Path) -> Workspace:
+# The baseline: one scenario, concrete enough to build without asking; T1 and T2 both trace to it.
+SPEC_BASE = """# Booking extension
+
+Guests extend a booking by one night.
+
+## Scenarios
+
+- S1: `extend(booking, room_free)` in src/booking.py adds one night to a booking when the room is free, and raises
+  ValueError when it is not. A booking is a dict `{"nights": int}`, and extend returns a new dict. It is a pure
+  function; it has no storage and no HTTP route.
+"""
+
+# S6 and S7: S2 is another task's, S3 is nobody's.
+SPEC_GAPS = """# Booking extension
+
+Guests extend a booking by one night, and see it.
+
+## Scenarios
+
+- S1: `extend(booking, room_free)` in src/booking.py adds one night to a booking when the room is free, and raises
+  ValueError when it is not. A booking is a dict `{"nights": int}`, and extend returns a new dict. It is a pure function; it has no storage and no HTTP route.
+- S2: the booking screen shows the new number of nights.
+- S3: a guest is emailed a receipt when a booking is extended.
+"""
+
+TASKS_GAPS = """- id: T1
+  title: Booking API extension
+  repo: backend
+  files: [src/booking.py, tests/test_booking.py]
+  traces_to: [S1]
+- id: T2
+  title: Booking screen
+  repo: home
+  files: [web/booking.html]
+  depends_on: [T1]
+  traces_to: [S2]
+"""
+
+# S8: T1's own scenario needs a change in src/rooms.py, which its task doesn't list.
+SPEC_OUTSIDE = """# Booking extension
+
+Guests extend a booking by one night.
+
+## Scenarios
+
+- S1: `extend(booking, room_free)` in src/booking.py adds one night to a booking when the room is free, and raises
+  ValueError when it is not. The existing `is_free(room, night)` in src/rooms.py must also be changed to treat a
+  night as taken when the room is closed for cleaning, so that `room_free` is computed correctly. A booking is a dict `{\"nights\": int}`, and a room is a dict
+  with `booked` and `cleaning` lists of night strings.
+"""
+
+TASKS_OUTSIDE = """- id: T1
+  title: Booking API extension
+  repo: backend
+  files: [src/booking.py, tests/test_booking.py]
+  traces_to: [S1]
+"""
+
+
+def task_workspace(root: Path, spec: str | None = None, tasks: str | None = None) -> Workspace:
     """A workspace whose spec is merged and whose tasks are planned, ready for T1."""
     ws = Workspace(root)
-    ws.do_spec()
+    kwargs = {k: v for k, v in (("spec", spec), ("tasks", tasks)) if v is not None}
+    ws.do_spec(**kwargs)
     ws.do_plan()
     return ws
 
@@ -103,6 +163,41 @@ def check(name: str, ok: bool, session: dict, detail) -> bool:
     return ok
 
 
+ROOMS = """def is_free(room: dict, night: str) -> bool:
+    return night not in room.get("booked", [])
+"""
+
+
+def run_implementer(root: Path, args, spec: str | None = None, tasks: str | None = None, seed: dict | None = None):
+    """Hand T1 of a workspace to the implementer; return the workspace, session, message, JSON and record result."""
+    ws = task_workspace(root, spec, tasks)
+    handout = ws.next("--task", "T1", user="backend-dev")
+    ws.checkout(ws.api, handout["branch"], handout["start_from"])
+    for rel, text in (seed or {}).items():
+        ws.write(ws.api, rel, text)
+    if seed:
+        ws.commit(ws.api, "seed")
+    message, session = run_agent("fab0:implementer", handout, ws.api, [ws.home], args)
+    returned = extract_json(message)
+    rec = ws.record("implement", returned, task="T1", expect=None)
+    return ws, session, message, returned, rec
+
+
+def questions_of(returned: str) -> list[str]:
+    try:
+        return json.loads(returned).get("questions") or []
+    except (json.JSONDecodeError, AttributeError):
+        return []
+
+
+def changed_paths(repo: Path) -> list[str]:
+    """Paths the working tree changed or added since the last commit, untracked files listed one by one."""
+    out = subprocess.run(
+        ["git", "-C", str(repo), "status", "--porcelain", "--untracked-files=all"], capture_output=True, text=True
+    ).stdout
+    return [line[3:] for line in out.splitlines()]
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--model", help="run every agent on this model instead of the one the brief resolves")
@@ -124,19 +219,36 @@ def main() -> int:
         )
 
     if args.only in (None, "implementer"):
-        ws = task_workspace(tmp / "implementer")
-        handout = ws.next("--task", "T1", user="backend-dev")
-        ws.checkout(ws.api, handout["branch"], handout["start_from"])
-        message, session = run_agent("fab0:implementer", handout, ws.api, [ws.home], args)
-        returned = extract_json(message)
-        rec = ws.record("implement", returned, task="T1", expect=None)
         # The fixture's T1 is fully deliverable and its only scenario is traced: any question would be a false gap.
-        try:
-            questions = json.loads(returned).get("questions") or []
-        except (json.JSONDecodeError, AttributeError):
-            questions = []
+        ws, session, message, returned, rec = run_implementer(tmp / "implementer", args, SPEC_BASE)
+        questions = questions_of(returned)
         ok = bool(rec.get("ok") and rec.get("verified")) and not questions
         results.append(check("implementer", ok, session, {"message": message, "questions": questions, **rec}))
+
+        # S6 and S7: no question about S2 (T2 delivers it), a question about S3 (no task delivers it).
+        ws, session, message, returned, rec = run_implementer(
+            tmp / "implementer-gaps", args, SPEC_GAPS, TASKS_GAPS
+        )
+        questions = questions_of(returned)
+        about_s2 = [q for q in questions if re.search(r"\bS2\b", q) and not re.search(r"\bS3\b", q)]
+        about_s3 = [q for q in questions if re.search(r"\bS3\b", q) and re.search(r"\bno (other )?task|not traced|any task|nobody|no one", q, re.I)]
+        ok = bool(rec.get("ok") and rec.get("verified")) and not about_s2 and bool(about_s3)
+        results.append(
+            check("impl-gaps", ok, session, {"message": message, "questions": questions, "S2": about_s2, **rec})
+        )
+
+        # S8: the file outside the task stays unchanged, and a question names it.
+        ws, session, message, returned, rec = run_implementer(
+            tmp / "implementer-outside", args, SPEC_OUTSIDE, TASKS_OUTSIDE, {"src/rooms.py": ROOMS}
+        )
+        questions = questions_of(returned)
+        changed = changed_paths(ws.api)
+        outside = [p for p in changed if p not in ("src/booking.py", "tests/test_booking.py") and not p.startswith("work/") and "__pycache__" not in p]
+        named = [q for q in questions if "rooms.py" in q]
+        ok = bool(rec.get("ok") and rec.get("verified")) and not outside and bool(named)
+        results.append(
+            check("impl-outside", ok, session, {"message": message, "questions": questions, "outside": outside, **rec})
+        )
 
     if args.only in (None, "reviewer"):
         # The reviewer judges a known implementation, so its check doesn't depend on the implementer's run.
