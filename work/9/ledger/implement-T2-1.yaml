@@ -1,0 +1,15 @@
+stage: implement
+task: T2
+attempt: 1
+actor: eugenefurs
+model: sonnet
+branch: implement/9-T2-the-implementer-asks-only-about-scenario
+inputs:
+  spec: sha256:6cbf28eca1d17b484bfd9d77f453a2299eac259d26938f6fef1a1905ce424504
+  tasks: sha256:0066e83bec611f57d1ddff890281f09752b668cc61273f4745b45d2e754a3aa1
+  pr-review: sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945
+outputs: {}
+verify: {}
+gate:
+  type: agent
+summary: 'Edited plugins/fab0/agents/implementer.md in fab0-core. The brief list now includes the other tasks, referred to by the heading `## Other tasks of this run`. A new section, "What is a question", covers S6-S8: the implementer doesn''t ask about or build a scenario another task traces to; for a scenario no task of the run delivers, it asks a question that names the scenario and says no task delivers it; for a file its own scenario needs but its task doesn''t list, it leaves the file unchanged and asks, naming the file and why. In scripts/check-agents.py the implementer check now also fails if the agent returns any questions. The fixture''s T1 is fully deliverable and its only scenario S1 is traced, so any question there would be a false gap. I did not run check-agents.py: it needs live `claude` sessions and costs tokens. It compiles (py_compile). `uv run pytest -q` ran: 73 passed. No unit tests cover the agent prompt, so S6-S8 have no automated test.'

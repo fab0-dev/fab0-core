@@ -128,10 +128,15 @@ def main() -> int:
         handout = ws.next("--task", "T1", user="backend-dev")
         ws.checkout(ws.api, handout["branch"], handout["start_from"])
         message, session = run_agent("fab0:implementer", handout, ws.api, [ws.home], args)
-        rec = ws.record("implement", extract_json(message), task="T1", expect=None)
-        results.append(
-            check("implementer", rec.get("ok") and rec.get("verified"), session, {"message": message, **rec})
-        )
+        returned = extract_json(message)
+        rec = ws.record("implement", returned, task="T1", expect=None)
+        # The fixture's T1 is fully deliverable and its only scenario is traced: any question would be a false gap.
+        try:
+            questions = json.loads(returned).get("questions") or []
+        except (json.JSONDecodeError, AttributeError):
+            questions = []
+        ok = bool(rec.get("ok") and rec.get("verified")) and not questions
+        results.append(check("implementer", ok, session, {"message": message, "questions": questions, **rec}))
 
     if args.only in (None, "reviewer"):
         # The reviewer judges a known implementation, so its check doesn't depend on the implementer's run.
