@@ -28,7 +28,7 @@ Guests extend a booking by one night.
 TASKS = """- id: T1
   title: Booking API extension
   repo: backend
-  files: [src/booking.py]
+  files: [src/booking.py, tests/test_booking.py]
   traces_to: [S1]
 - id: T2
   title: Booking screen
@@ -184,18 +184,18 @@ class Workspace:
 
     # -- the resolver
 
-    def run(self, *args: str, expect: int = 0) -> dict:
+    def run(self, *args: str, expect: int | None = 0) -> dict:
         env = {**os.environ, "FAB0_GH_FAKE": str(self.gh_path)}
         run = subprocess.run(
             [sys.executable, str(SCRIPT), *args], cwd=self.home, env=env, capture_output=True, text=True
         )
-        assert run.returncode == expect, f"exit {run.returncode}\n{run.stdout}\n{run.stderr}"
+        assert expect is None or run.returncode == expect, f"exit {run.returncode}\n{run.stdout}\n{run.stderr}"
         return json.loads(run.stdout)
 
     def next(self, *extra: str, user: str = "po-user", expect: int = 0) -> dict:
         return self.run("next", RUN, *extra, "--as", user, expect=expect)
 
-    def record(self, stage: str, returned, task: str | None = None, gate: bool = False, expect: int = 0) -> dict:
+    def record(self, stage: str, returned, task: str | None = None, gate: bool = False, expect: int | None = 0) -> dict:
         path = self.root / "return.json"
         path.write_text(returned if isinstance(returned, str) else json.dumps(returned))
         args = ["record", RUN, stage, "--return", str(path)]

@@ -1,7 +1,7 @@
 {
   "name": "fab0",
-  "version": "0.1.0",
-  "description": "fab0 core: the resolver, core schemas, and (from the next step) the core agents and skills",
+  "version": "0.2.0",
+  "description": "fab0 core: the resolver, the core agents (spec-author, implementer, reviewer) and the /fab0:run and /fab0:inbox skills",
   "author": {
     "name": "fab0-dev",
     "url": "https://github.com/fab0-dev"
@@ -9,5 +9,10 @@
   "homepage": "https://github.com/fab0-dev/fab0",
   "repository": "https://github.com/fab0-dev/fab0-core",
   "license": "Apache-2.0",
-  "keywords": ["pipeline", "workflow", "github", "agents"]
+  "keywords": [
+    "pipeline",
+    "workflow",
+    "github",
+    "agents"
+  ]
 }

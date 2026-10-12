@@ -9,6 +9,9 @@ The `fab0` marketplace and core plugin. The product's home repo is `fab0-dev/fab
   - it runs through `uv run --script`, with PEP 723 inline dependencies (`pyyaml`, `jsonschema`);
   - it lands on the Bash `PATH` when the plugin is enabled;
   - it finds its schemas relative to itself.
+- `plugins/fab0/agents/` and `plugins/fab0/skills/` are plain Claude Code agents and skills:
+  - an agent describes its role and its output, and never names stages, pipelines or the agent that comes next;
+  - every word fab0 needs to pass to an agent goes in the brief the resolver renders.
 - `tests/` drive the script against temporary git repos made from `tests/fixtures/`, with a JSON-file fake of GitHub (`FAB0_GH_FAKE`).
 
 ## Conventions
@@ -24,7 +27,11 @@ The `fab0` marketplace and core plugin. The product's home repo is `fab0-dev/fab
 ```bash
 uv run pytest
 uv run ruff check
-claude plugin validate .
+claude plugin validate --strict .
+claude plugin validate --strict plugins/fab0/agents
+claude plugin validate --strict plugins/fab0/skills
 ```
+
+After changing an agent, a skill an agent loads, or the brief, run `uv run python scripts/check-agents.py`. It costs tokens.
 
 Before a PR, check that no noun from the predecessor project or from a consuming project appears in the diff, its commit messages or the PR text. Keep the list of those nouns local; never commit it.
