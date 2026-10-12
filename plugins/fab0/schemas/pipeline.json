@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "fab0 pipeline (.fab0/pipelines/<name>.yaml)",
+  "type": "object",
+  "required": ["pipeline", "item", "stages"],
+  "additionalProperties": false,
+  "properties": {
+    "pipeline": {"$ref": "#/$defs/name"},
+    "item": {"$ref": "#/$defs/item"},
+    "inputs": {"type": "object"},
+    "outputs": {"type": "object"},
+    "stages": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/step"}}
+  },
+  "$defs": {
+    "name": {"type": "string", "pattern": "^[a-z][a-z0-9-]*$"},
+    "item": {
+      "type": "object",
+      "required": ["issue_type"],
+      "additionalProperties": false,
+      "properties": {"issue_type": {"type": "string", "minLength": 1}}
+    },
+    "step": {
+      "oneOf": [
+        {"$ref": "#/$defs/name"},
+        {
+          "type": "object",
+          "required": ["stage"],
+          "additionalProperties": false,
+          "properties": {"stage": {"$ref": "#/$defs/name"}, "when": {}}
+        },
+        {
+          "type": "object",
+          "required": ["foreach"],
+          "additionalProperties": false,
+          "properties": {
+            "foreach": {"type": "string", "pattern": "^[a-z][a-z0-9-]*(\\.[A-Za-z0-9_-]+)*$"},
+            "item": {"$ref": "#/$defs/item"},
+            "stages": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/name"}},
+            "gate": {"enum": ["none", "human"]},
+            "call": {},
+            "inputs": {},
+            "when": {}
+          }
+        }
+      ]
+    }
+  }
+}

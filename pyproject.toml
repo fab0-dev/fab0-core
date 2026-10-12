@@ -1,0 +1,23 @@
+[project]
+name = "fab0-core-dev"
+version = "0.0.0"
+description = "Development environment for the fab0 core plugin (not a package)"
+requires-python = ">=3.12"
+dependencies = []
+
+[dependency-groups]
+dev = ["pytest>=8", "pyyaml>=6.0", "jsonschema>=4.18", "ruff>=0.6"]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+include = ["*.py", "plugins/fab0/bin/fab0-resolve"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]

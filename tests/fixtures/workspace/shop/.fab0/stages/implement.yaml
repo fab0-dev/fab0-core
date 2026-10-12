@@ -1,0 +1,8 @@
+stage: implement
+agent: fab0:implementer
+model: balanced
+inputs: [spec, tasks]
+repos: {write: [task], read: [all]}
+return: {questions: optional}
+owner: repo-owner
+gate: {agent: fab0:reviewer, model: deep}

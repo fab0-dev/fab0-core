@@ -1,0 +1,10 @@
+pipeline: story
+item: {issue_type: Story}
+stages:
+  - spec
+  - plan
+  - foreach: tasks
+    item: {issue_type: Task}
+    stages: [implement]
+    gate: human
+  - deliver
