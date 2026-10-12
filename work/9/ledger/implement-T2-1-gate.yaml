@@ -1,0 +1,35 @@
+stage: implement
+task: T2
+attempt: 1
+actor: eugenefurs
+model: opus
+gate:
+  type: agent
+  agent: fab0:reviewer
+  decision: reject
+review:
+  decision: reject
+  reasons:
+  - The prompt change in plugins/fab0/agents/implementer.md covers S6, S7 and S8 in wording, the diff touches only the two files the task lists, and `uv run pytest -q` passes (73 tests).
+  - No check shows S6, S7 or S8. The only test change makes the existing implementer check in scripts/check-agents.py fail when the agent returns any question. The fixture spec has only S1, and both T1 and T2 trace to it. So the fixture has no scenario that only another task delivers (S6), no scenario that no task delivers (S7), and no task whose scenario needs a file outside its list (S8).
+  - The producer did not run the live agent check, so nothing shows the new prompt actually changes the implementer's behaviour.
+  findings:
+  - check: Tests and checks
+    message: 'S7 has no check: no case in check-agents.py gives the implementer a spec scenario that no task traces to and asserts that it returns a question naming that scenario and saying no task of the run delivers it.'
+    location: scripts/check-agents.py:127
+  - check: Tests and checks
+    message: 'S8 has no check: no case gives the implementer a task whose own scenario needs a file outside its `files`, and asserts that the file stays unchanged and a question names the file and the reason.'
+    location: scripts/check-agents.py:127
+  - check: Tests and checks
+    message: 'S6 is not really tested: in the fixture, T1 and T2 both trace only to S1, so ''no questions'' never tests the case where another task alone delivers a scenario such as S2. The check needs a fixture where another task traces to a scenario T1 does not, either by having check-agents.py write its own spec and task list into the workspace or by adding a variant.'
+    location: scripts/check-agents.py:133
+  - check: Tests and checks
+    message: check-agents.py was not run after the change, only compiled. Nothing shows the edited prompt passes even the narrowed implementer check. Run `--only implementer` at least once and report the result, or say plainly in the summary that it is unverified.
+    location: scripts/check-agents.py:138
+  - check: Quality
+    message: 'Minor: the new ''What is a question'' section repeats the existing Scope rule about files outside the task (the first bullet of Scope). That is consistent, but the two places could drift apart. Not blocking.'
+    location: plugins/fab0/agents/implementer.md:31
+  unmet:
+  - 'S6: no check shows the implementer skipping a question about a scenario that only another task traces to'
+  - 'S7: no check shows the implementer asking about a scenario no task delivers'
+  - 'S8: no check shows the implementer leaving an unlisted file unchanged and asking about it'
