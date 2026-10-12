@@ -1,0 +1,18 @@
+stage: implement
+task: T1
+attempt: 1
+actor: eugenefurs
+model: sonnet
+branch: implement/5-T1-fab0-resolve-reports-its-version-and-nam
+inputs:
+  spec: sha256:008eb51d1bf345b04750f7806a9035e5c74a11d09b0af040895d177d903e2780
+  tasks: sha256:1b51f7b951baa938b0fc00c0cbe67d7fc86294c3f2014bb24617fcf803a17e33
+  pr-review: sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945
+outputs: {}
+verify: {}
+gate:
+  type: agent
+summary: Implemented S1-S5 and S7 in core. In plugins/fab0/bin/fab0-resolve I added read_version(), which reads .claude-plugin/plugin.json relative to the script and fails with exit 1 and an error naming the manifest path if the manifest is missing, not JSON, or has no non-empty string version. I added a top-level `--version` flag that prints {"ok":true,"fab0_version":...} and reads no project wiring, git or GitHub. Both stage and gate briefs get the line `Handed out by fab0 <v>.` right after the run line, and `next` results for stage and gate carry `fab0_version`. The version is read while the brief is rendered, so an unreadable manifest fails before any pending hand-out is written (S5). README.md Contents row updated. New tests/test_version.py covers S1, S2 (7 manifest cases), S3 (with and without a task), S4, S5 (no pending dir, exit 1) and S7 (names both versions on mismatch). Ran `uv run pytest` (68 passed), `uv run ruff check` (clean) and `ruff format --check` (clean). I did not run
+  `claude plugin validate`.
+questions:
+- 'S6 (attempt commit subject `<stage>[ <task>] attempt <n> (fab0 <version>): <summary>`) is not delivered. The commit message is written in plugins/fab0/skills/run/SKILL.md (line 43), which is not in T1''s files, so I did not touch it. The change is to add ` (fab0 <fab0_version from the hand-out>)` before the colon in that commit template, and probably to give the gate commit line at line 51 the same treatment if wanted. Settle it by either adding plugins/fab0/skills/run/SKILL.md to T1''s files, or by creating a separate task for it that traces to S6.'
