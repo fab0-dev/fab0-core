@@ -1336,6 +1336,31 @@ class Resolver:
             ]
         return lines
 
+    def _other_tasks_lines(self, element: dict | None) -> list[str]:
+        """The `## Other tasks of this run` section: the other items of the foreach list, in list order."""
+        if element is None:
+            return []
+        step = next((s for s in self.steps if s["kind"] == "foreach" and s["art"] == self._each_art), None)
+        items = self.elements(step)[0] if step else None
+        if items is None:
+            return []
+        lines = ["## Other tasks of this run", ""]
+        others = [i for i in items if i["id"] != element["id"]]
+        if not others:
+            return lines + ["This run has no other tasks.", ""]
+        for item in others:
+            parts = [f"`{item['id']}`"]
+            if item.get("title"):
+                parts.append(f"{item['title']}")
+            line = "- " + ": ".join(parts)
+            details = []
+            if item.get("repo"):
+                details.append(f"repo {item['repo']}")
+            traces = item.get("traces_to") or []
+            details.append(("delivers " + ", ".join(str(t) for t in traces)) if traces else "delivers no scenarios")
+            lines.append(f"{line} ({'; '.join(details)})")
+        return lines + [""]
+
     def render_brief(
         self,
         stage: dict,
@@ -1350,6 +1375,7 @@ class Resolver:
     ) -> str:
         task = f", task {element['id']}" if element else ""
         lines = self._header(f"{stage['stage']}{task}, attempt {attempt}", stage, element)
+        lines += self._other_tasks_lines(element)
         lines += ["Do only the work below. Don't commit, push, or use GitHub; fab0 does that when you return.", ""]
         lines += ["## Inputs", "", *self._input_lines(stage, element), ""]
         lines += ["## Outputs", ""]

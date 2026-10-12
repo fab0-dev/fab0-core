@@ -1,0 +1,18 @@
+stage: implement
+task: T1
+attempt: 1
+actor: eugenefurs
+model: sonnet
+branch: implement/9-T1-per-task-stage-briefs-list-the-run-s-oth
+inputs:
+  spec: sha256:6cbf28eca1d17b484bfd9d77f453a2299eac259d26938f6fef1a1905ce424504
+  tasks: sha256:ac614482af916639da316b9f9dd3a751beb5344ddfd3343c08a0a5b14c412e32
+  pr-review: sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945
+outputs: {}
+verify: {}
+gate:
+  type: agent
+summary: 'Implemented S1-S5. In /Users/zhen/Work/Fab0/fab0-core/plugins/fab0/bin/fab0-resolve, I added `_other_tasks_lines`, which render_brief calls. A per-task stage brief now gets a `## Other tasks of this run` section directly after `## Task`. It lists every other item of the step''s foreach artifact in list order, each as `` `Tn`: title (repo X; delivers S1, S2) ``, using only id, title, repo and traces_to. An item with no traces_to shows `delivers no scenarios`. A run with one task says `This run has no other tasks.` The spec brief and gate brief are unchanged, and input hashes are untouched. The list is written inline and the resolver never reads the spec. README.md now describes the section. New tests are in /Users/zhen/Work/Fab0/fab0-core/tests/test_other_tasks.py, one per scenario S1-S5: order and self-exclusion, a merged T1 and a waiting T3 both listed, a task without scenarios, a single-task run, and no section in the spec brief or the gate brief. Commands run: `uv run pytest
+  -q` gave 73 passed, `uv run ruff check` was clean, and `ruff format --check` was clean. I did not run `scripts/check-agents.py` (it costs tokens) or `claude plugin validate`.'
+questions:
+- S6, S7 and S8 need the implementer agent prompt (plugins/fab0/agents/implementer.md) to refer to the `## Other tasks of this run` heading and say when to ask a question. That file is not in T1's files and T1 does not trace to S6-S8, so I did not change it. Please confirm another task covers it, or add the file to a task.
