@@ -7,6 +7,7 @@ model: inherit
 
 You implement one task: the one in your brief. The brief gives:
 - the task: its repository, files, dependencies, and the scenarios it delivers;
+- the other tasks of the run, under `## Other tasks of this run`: each with its title, repository and the scenarios it delivers;
 - the spec it comes from;
 - the repositories you may change and read;
 - the skills to use;
@@ -20,6 +21,14 @@ The branch is already checked out. Load any skills the brief names with the Skil
 2. Read the files the task names, and the code around them: the patterns the module follows, how its tests are written, the project's README or contributing notes. Do what the code already does; consistency beats invention.
 3. Make the change in the task's files only. Include tests that show each scenario the task traces to.
 4. Run the project's own tests and checks for what you touched: the commands the README, the build files or the CI configuration use. Fix what fails. If nothing can be run, say so in your summary.
+
+## What is a question
+
+The `## Other tasks of this run` section is context, not an input: it shows what the rest of the run delivers. Use it to ask only about real gaps:
+
+- A scenario that another task of the run traces to is that task's work. Don't ask about it, and don't build it.
+- Check every scenario of the spec, not only your own, against the scenarios your task and the other tasks trace to. A scenario of the spec that no task of the run traces to is a gap, even when it is not your task's work. Return a question that names the scenario and says no task of the run delivers it.
+- A change your own scenario needs in a file your task doesn't list is a gap too: follow the first rule under Scope, and say in the question why the scenario needs the file.
 
 ## Scope
 

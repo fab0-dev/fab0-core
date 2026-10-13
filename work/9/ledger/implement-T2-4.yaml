@@ -1,0 +1,16 @@
+stage: implement
+task: T2
+attempt: 4
+actor: eugenefurs
+model: sonnet
+branch: implement/9-T2-the-implementer-asks-only-about-scenario
+inputs:
+  spec: sha256:6cbf28eca1d17b484bfd9d77f453a2299eac259d26938f6fef1a1905ce424504
+  tasks: sha256:0066e83bec611f57d1ddff890281f09752b668cc61273f4745b45d2e754a3aa1
+  pr-review: sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945
+outputs: {}
+verify: {}
+gate:
+  type: agent
+summary: 'Attempt 3 failed only because its reply carried `questions: null`. This reply leaves `questions` out, and I changed no files this attempt because the earlier work is already on the branch. The implementer agent, /Users/zhen/Work/Fab0/fab0-core/plugins/fab0/agents/implementer.md, lists `## Other tasks of this run` among the brief''s contents and has a ''What is a question'' section. The section covers three rules. A scenario another task traces to gets no question and is not built (S6). A scenario no task traces to gets a question that names it and says no task of the run delivers it (S7). A change to an unlisted file gets a question that names the file and says why the scenario needs it, and the file stays unchanged (S8). The exit check, /Users/zhen/Work/Fab0/fab0-core/scripts/check-agents.py, now has three implementer cases: a baseline with no false question, impl-gaps for S6 and S7, and impl-outside for S8. The only command I ran this attempt was `python3 -m py_compile scripts/check-agents.py`,
+  which passed. I did not run the headless check itself (`uv run python scripts/check-agents.py`), because it needs a logged-in `claude` and costs tokens.'
