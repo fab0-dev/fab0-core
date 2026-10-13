@@ -14,10 +14,10 @@
         "source": "git-subdir",
         "url": "fab0-dev/fab0-core",
         "path": "plugins/fab0",
-        "ref": "fab0--v0.4.0"
+        "ref": "fab0--v0.5.0"
       },
       "description": "fab0 core: the resolver, the core agents (spec-author, implementer, reviewer) and the /fab0:run and /fab0:inbox skills",
-      "version": "0.4.0",
+      "version": "0.5.0",
       "license": "Apache-2.0"
     }
   ]
