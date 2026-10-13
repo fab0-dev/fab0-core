@@ -69,7 +69,8 @@ Guests extend a booking by one night, and see it.
 ## Scenarios
 
 - S1: `extend(booking, room_free)` in src/booking.py adds one night to a booking when the room is free, and raises
-  ValueError when it is not. A booking is a dict `{"nights": int}`, and extend returns a new dict. It is a pure function; it has no storage and no HTTP route.
+  ValueError when it is not. A booking is a dict `{"nights": int}`, and extend returns a new dict. It is a pure
+  function; it has no storage and no HTTP route.
 - S2: the booking screen shows the new number of nights.
 - S3: a guest is emailed a receipt when a booking is extended.
 """
@@ -96,8 +97,8 @@ Guests extend a booking by one night.
 
 - S1: `extend(booking, room_free)` in src/booking.py adds one night to a booking when the room is free, and raises
   ValueError when it is not. The existing `is_free(room, night)` in src/rooms.py must also be changed to treat a
-  night as taken when the room is closed for cleaning, so that `room_free` is computed correctly. A booking is a dict `{\"nights\": int}`, and a room is a dict
-  with `booked` and `cleaning` lists of night strings.
+  night as taken when the room is closed for cleaning, so that `room_free` is computed correctly. A booking is a
+  dict `{"nights": int}`, and a room is a dict with `booked` and `cleaning` lists of night strings.
 """
 
 TASKS_OUTSIDE = """- id: T1
@@ -230,8 +231,14 @@ def main() -> int:
             tmp / "implementer-gaps", args, SPEC_GAPS, TASKS_GAPS
         )
         questions = questions_of(returned)
-        about_s2 = [q for q in questions if re.search(r"\bS2\b", q) and not re.search(r"\bS3\b", q)]
-        about_s3 = [q for q in questions if re.search(r"\bS3\b", q) and re.search(r"\bno (other )?task|not traced|any task|nobody|no one", q, re.I)]
+        # A question may mention S2 only to say another task delivers it, and then it must be about S3.
+        s2_delivered = r"\bS2\b[^.]*\b(T2|other task|another task)"
+        about_s2 = [
+            q for q in questions
+            if re.search(r"\bS2\b", q) and not (re.search(r"\bS3\b", q) and re.search(s2_delivered, q, re.I))
+        ]
+        no_task = r"\bno (other )?task|not traced|any task|nobody|no one"
+        about_s3 = [q for q in questions if re.search(r"\bS3\b", q) and re.search(no_task, q, re.I)]
         ok = bool(rec.get("ok") and rec.get("verified")) and not about_s2 and bool(about_s3)
         results.append(
             check("impl-gaps", ok, session, {"message": message, "questions": questions, "S2": about_s2, **rec})
@@ -243,8 +250,12 @@ def main() -> int:
         )
         questions = questions_of(returned)
         changed = changed_paths(ws.api)
-        outside = [p for p in changed if p not in ("src/booking.py", "tests/test_booking.py") and not p.startswith("work/") and "__pycache__" not in p]
-        named = [q for q in questions if "rooms.py" in q]
+        own = ("src/booking.py", "tests/test_booking.py")
+        outside = [
+            p for p in changed if p not in own and not p.startswith("work/") and "__pycache__" not in p
+        ]
+        why = r"because|needs?\b|so that|must|require|in order to|to treat"
+        named = [q for q in questions if "rooms.py" in q and re.search(why, q, re.I)]
         ok = bool(rec.get("ok") and rec.get("verified")) and not outside and bool(named)
         results.append(
             check("impl-outside", ok, session, {"message": message, "questions": questions, "outside": outside, **rec})
