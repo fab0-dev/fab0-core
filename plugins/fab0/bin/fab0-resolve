@@ -1131,6 +1131,7 @@ class Resolver:
     ) -> dict:
         role, users = self.owner(self.w.stages[stage_name], element)
         closes = issue_ref(self.task_issues().get(element["id"])) if element else None
+        review, draft = self.review_status(reason, stage_name, element, entry, repo)
         return self.result(
             "wait",
             reason=reason,
@@ -1145,7 +1146,33 @@ class Resolver:
             closes=closes,
             refs=f"{self.home.github}#{self.run}",
             questions=questions,
+            review=review,
+            draft=draft,
         )
+
+    def review_status(
+        self, reason: str, stage_name: str, element: dict | None, entry: dict, repo: Repo
+    ) -> tuple[dict | None, bool | None]:
+        """What the agent gate has decided on the attempt the branch holds, and whether its PR should be a draft.
+
+        Only for a stage with an agent gate. An attempt that returned questions isn't handed to the gate, so it
+        is unreviewed and its PR is a draft; otherwise the gate's decision on the attempt is the statement.
+        """
+        if not isinstance(self.w.stages[stage_name].get("gate", "none"), dict):
+            return None, None
+        n = entry["attempt"]
+        if reason == "questions":
+            text = (
+                f"Not reviewed: attempt {n} returned questions, so the review gate hasn't looked at this change. "
+                "It reviews the next attempt, after the answers."
+            )
+            return {"reviewed": False, "attempt": n, "text": text}, True
+        got = self.entries(repo, stage_name, element["id"] if element else None)[1].get(n)
+        if got is None:
+            return None, None
+        decision = got[0]["gate"]["decision"]
+        text = f"Reviewed: the review gate decided {decision} on attempt {n}."
+        return {"reviewed": True, "attempt": n, "decision": decision, "text": text}, False
 
     def branch_for(self, stage_name: str, element: dict | None, prev: dict | None, repo: Repo) -> tuple[str, str]:
         """The branch an attempt runs on, and whether it starts from that branch or from the base."""

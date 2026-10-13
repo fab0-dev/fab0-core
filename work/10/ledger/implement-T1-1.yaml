@@ -1,0 +1,55 @@
+stage: implement
+task: T1
+attempt: 1
+actor: eugenefurs
+model: sonnet
+branch: implement/10-T1-the-resolver-says-whether-a-waiting-stag
+inputs:
+  spec: sha256:2e7be37abb6c072780a7cb0bed8c68de9a78ac082bac333dcafa99088d12ce56
+  tasks: sha256:6739eb03212162768c4ea9da1e8b2aefb1c624f4b46be5158aa0f688945c55fb
+  pr-review: sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945
+outputs: {}
+verify: {}
+gate:
+  type: agent
+summary: 'The resolver now says what the review gate has decided on a waiting stage''s attempt. In /Users/zhen/Work/Fab0/fab0-core/plugins/fab0/bin/fab0-resolve, `wait_pr` adds two fields through a new `review_status`. `review` has `reviewed`, `attempt`, `decision` when reviewed, and `text`. `draft` is a boolean.
+
+
+  - **reason `questions`:** `review` is `{reviewed: false, attempt: n, text}` and `draft` is true. The text is the spec''s sentence: `Not reviewed: attempt <n> returned questions, so the review gate hasn''t looked at this change. It reviews the next attempt, after the answers.` The gate is still not handed out, because the existing questions check runs before the gate check.
+
+  - **reasons `human-gate` and `escalated`:** the gate entry for the attempt the branch holds gives `{reviewed: true, attempt: n, decision, text}` and `draft` is false. The text is `Reviewed: the review gate decided <decision> on attempt <n>.` The escalated case reports the real decision on the last attempt, such as `reject` on attempt 3.
+
+  - **Stages without an agent gate:** the spec stage and any `gate: none` stage get neither field. The resolver `next` command has no other output change, and the existing `wait` fields are untouched.
+
+
+  I added /Users/zhen/Work/Fab0/fab0-core/tests/test_review_state.py with 7 tests:
+
+  - S7 questions: unreviewed draft, and the gate is not handed out even once a pull request exists.
+
+  - S4: `human-gate` after approve is reviewed on attempt 1, not a draft.
+
+  - S3: attempt 2 approved after a review on the questions draft gives reviewed on attempt 2, not a draft.
+
+  - S5: three rejects give `escalated`, with the decision on attempt 3 and not a draft. A separate test covers an `escalate` decision.
+
+  - S6: an approved attempt, then a CHANGES_REQUESTED review, then a questions attempt 2, gives unreviewed attempt 2 and a draft.
+
+  - S7 negative: the spec stage''s `human-gate` has no `review` or `draft`.
+
+
+  The README row for `fab0-resolve` now documents the fields.
+
+
+  Checks: `uv run pytest` gave 80 passed, `uv run ruff check` passed, and `uv run ruff format --check` was clean. I did not run `claude plugin validate`, which this change doesn''t touch, or `scripts/check-agents.py`, which costs tokens and covers agents and the brief, neither of which I changed.
+
+
+  For T2:
+
+  - The `review` object has no gate reasons. S5 needs the body to start with them, and `/fab0:run` already holds them from the gate''s return.
+
+  - `draft` is the target state only. The result does not say whether the pull request is currently a draft, so `/fab0:run` has to read or set it itself to stay idempotent (S9).
+
+  - The wait results of foreach tasks, whose later stage has `gate: human`, also carry `review` and `draft` when that task''s last stage has an agent gate. That is the post-approve `human-gate` of S4.
+
+
+  No questions.'
