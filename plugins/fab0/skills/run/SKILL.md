@@ -56,6 +56,10 @@ Repeat until a step says stop:
 
 **`wait`**: act on `reason`, then stop.
 - `human-gate`, `questions`, `escalated`: push and open or update the pull request, post the questions, and post the handoff comment, all as the `fab0:github` skill says. Tell the person who reviews next, and give the link.
+  - When the result carries `review` and `draft` (a stage with an agent gate), the pull request and the handoff comment state `review.text` verbatim, and the pull request is a draft exactly when `draft` is true: opened as a draft, marked ready, or turned back into a draft as needed. Don't write the sentence or pick the state yourself.
+  - With reason `questions` the gate is not handed out: the pull request is opened as an unreviewed draft, and the questions are posted and the item assigned to the owner, in this same session. A later attempt that the gate decides on makes the same pull request ready and updates its statement.
+  - Running the same wait again with no new attempt, review or input change leaves the pull request's draft state and body as they are, and no step fails because the state is already set.
+  - If GitHub refuses the draft state, still open or update the pull request with the statement, still post the questions and the handoff comment, and say in the report that the pull request couldn't be made a draft.
 - `assigned`: with `--take`, claim the task (`fab0:github`) and continue the loop. Without it, say who has the task and that `--take` claims it.
 - `owner`: say who owns the stage. This person can't run it.
 - `tasks`: list what each task is waiting for.
@@ -68,7 +72,8 @@ Repeat until a step says stop:
 
 Report briefly:
 - what ran, with each stage, task, attempt, model, and verified or not;
-- what was opened or updated on GitHub, with links;
+- what was opened or updated on GitHub, with links, and for a pull request with a review statement whether it is a draft or ready and what the statement says;
+- any pull request that couldn't be made a draft;
 - what the run waits for now, and on whom.
 
 Then stop. Don't start other runs.
