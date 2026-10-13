@@ -27,6 +27,25 @@ fab0 runs software delivery as pipelines of Claude Code agents. The pipelines ar
 
 A project is wired by copying a recipe into its `.fab0/` directory; recipes live in `fab0-dev/fab0-recipes`.
 
+## Releases
+
+The marketplace on `main` is the catalog of releases. Its `fab0` entry points at the tagged release (`fab0--v<version>`), not at `main`, so unreleased changes on `main` never reach an install. Projects declare the marketplace without a `ref` and with `autoUpdate: true`, so they never change for a release. Claude Code fetches a new release in the background during a session, and loads it at the next start. To fetch it at once:
+
+```bash
+claude plugin marketplace update fab0
+```
+
+```bash
+claude plugin update fab0@fab0 --scope project
+```
+
+A release is one PR here:
+1. Set the same `version` in `plugins/fab0/.claude-plugin/plugin.json` and in the `fab0` entry of `.claude-plugin/marketplace.json`, and point the entry's `ref` at `fab0--v<version>`.
+2. Once it is merged, tag `main` right away, since installs follow the entry as soon as it is on `main`:
+   ```bash
+   claude plugin tag plugins/fab0 --push
+   ```
+
 ## Develop
 
 ```bash

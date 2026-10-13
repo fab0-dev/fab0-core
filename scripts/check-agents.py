@@ -227,14 +227,13 @@ def main() -> int:
         results.append(check("implementer", ok, session, {"message": message, "questions": questions, **rec}))
 
         # S6 and S7: no question about S2 (T2 delivers it), a question about S3 (no task delivers it).
-        ws, session, message, returned, rec = run_implementer(
-            tmp / "implementer-gaps", args, SPEC_GAPS, TASKS_GAPS
-        )
+        ws, session, message, returned, rec = run_implementer(tmp / "implementer-gaps", args, SPEC_GAPS, TASKS_GAPS)
         questions = questions_of(returned)
         # A question may mention S2 only to say another task delivers it, and then it must be about S3.
         s2_delivered = r"\bS2\b[^.]*\b(T2|other task|another task)"
         about_s2 = [
-            q for q in questions
+            q
+            for q in questions
             if re.search(r"\bS2\b", q) and not (re.search(r"\bS3\b", q) and re.search(s2_delivered, q, re.I))
         ]
         no_task = r"\bno (other )?task|not traced|any task|nobody|no one"
@@ -251,9 +250,7 @@ def main() -> int:
         questions = questions_of(returned)
         changed = changed_paths(ws.api)
         own = ("src/booking.py", "tests/test_booking.py")
-        outside = [
-            p for p in changed if p not in own and not p.startswith("work/") and "__pycache__" not in p
-        ]
+        outside = [p for p in changed if p not in own and not p.startswith("work/") and "__pycache__" not in p]
         why = r"because|needs?\b|so that|must|require|in order to|to treat"
         named = [q for q in questions if "rooms.py" in q and re.search(why, q, re.I)]
         ok = bool(rec.get("ok") and rec.get("verified")) and not outside and bool(named)

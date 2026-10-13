@@ -1,6 +1,6 @@
 {
   "name": "fab0",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "fab0 core: the resolver, the core agents (spec-author, implementer, reviewer) and the /fab0:run and /fab0:inbox skills",
   "author": {
     "name": "fab0-dev",
