@@ -22,6 +22,10 @@ The `fab0` marketplace and core plugin. The product's home repo is `fab0-dev/fab
 - Ids and ledger names are never zero-padded.
 - Schemas are JSON Schema 2020-12.
 
+## Releases
+
+The `fab0` entry of `.claude-plugin/marketplace.json` points at a release tag, never at `main`; projects follow it with auto-update and pin nothing. A release is one PR: the same `version` in `plugin.json` and the marketplace entry, and the entry's `ref` set to `fab0--v<version>`. Tag `main` with `claude plugin tag plugins/fab0 --push` as soon as it is merged. The README has the steps.
+
 ## Checks
 
 ```bash
