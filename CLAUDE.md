@@ -7,8 +7,8 @@ The `fab0` marketplace and core plugin. The product's home repo is `fab0-dev/fab
 fab0 is being refactored; [REFACTOR.md](https://github.com/fab0-dev/fab0/blob/main/REFACTOR.md) in the home repo is the plan, the tracker and the decision log, and it overrides this file where they disagree. Until its step R8:
 - don't release: no version bump, no tag, so auto-update can't hand projects a half-built core;
 - don't use `/fab0:run` here; work by hand, one refactor step per PR;
-- the engine reads schema 2 only. `validate`, `status`, `next`, `record`, `apply` and `--version` work; `inbox` (R4) is refused until built. The tracker's dependencies (R3c) come next;
-- the agents and skills in `plugins/fab0/` are still the 0.5 ones and no longer match the engine; R4 rewrites the skills and moves the agents out, and `scripts/check-agents.py` moves with them in R5.
+- the engine reads schema 2 only, and every command works;
+- the delivery agents, `spec-format` and `tasks.json` left in R4; the `story` example in the examples repo takes them up in R5.
 
 ## Layout
 
@@ -17,11 +17,10 @@ fab0 is being refactored; [REFACTOR.md](https://github.com/fab0-dev/fab0/blob/ma
   - it runs through `uv run --script`, with PEP 723 inline dependencies (`pyyaml`, `jsonschema`);
   - it lands on the Bash `PATH` when the plugin is enabled;
   - it puts `plugins/fab0/lib/` on `sys.path` and calls `fab0_engine.cli.main`.
-- `plugins/fab0/lib/fab0_engine/` is the engine, one module per concern: `wiring` (load and cross-check), `schedule` (units and their states), `handout` (hand-outs, briefs, `record`), `gates` (gate hand-outs and verdicts), `actions` (the read-only check of every catalogue action), `apply` (performing actions, merges and pull requests), `artifacts` (reading, hashing and checking every kind), `hashing`, `ledger`, `claims`, `git`, `tracker` (read-only facts), `templates`, `schemas`, `catalogue`, `merge`, `version`, `cli`. It finds the plugin's schemas and manifest relative to itself.
-- `plugins/fab0/schemas/` holds the schema 2 JSON Schemas: `project`, `pipeline`, `step`, `artifact`, `verdict`, `return`, `ledger-entry` (and the 0.5 `tasks.json` until R4).
-- `plugins/fab0/agents/` and `plugins/fab0/skills/` are plain Claude Code agents and skills:
-  - an agent describes its role and its output, and never names stages, pipelines or the agent that comes next;
-  - every word fab0 needs to pass to an agent goes in the brief the resolver renders.
+- `plugins/fab0/lib/fab0_engine/` is the engine, one module per concern: `wiring` (load and cross-check), `schedule` (units and their states), `handout` (hand-outs, briefs, `record`), `gates` (gate hand-outs and verdicts), `actions` (the read-only check of every catalogue action), `apply` (performing actions, merges and pull requests), `artifacts` (reading, hashing and checking every kind), `hashing`, `ledger`, `claims`, `git`, `tracker` (facts, and the writes `apply` makes), `inbox`, `templates`, `schemas`, `catalogue`, `merge`, `version`, `cli`. It finds the plugin's schemas and manifest relative to itself.
+- `plugins/fab0/schemas/` holds the schema 2 JSON Schemas: `project`, `pipeline`, `step`, `artifact`, `verdict`, `return`, `ledger-entry`.
+- `plugins/fab0/skills/` holds plain Claude Code skills. `/fab0:run` executes hand-outs and never decides; every word fab0 needs to pass to an agent goes in the brief the engine renders, so any agent can be a step (P1).
+- Core ships no agents (P0). Agents belong to factories; the examples repo has them.
 - `tests/` drive the engine against copies of the fixture factories in `tests/fixtures/` (`story`, `docs`, `triage`), through the shim, and import `fab0_engine` modules directly for unit tests.
 
 ## Conventions
@@ -42,10 +41,10 @@ The `fab0` entry of `.claude-plugin/marketplace.json` points at a release tag, n
 uv run pytest
 uv run ruff check
 claude plugin validate --strict .
-claude plugin validate --strict plugins/fab0/agents
+claude plugin validate --strict plugins/fab0
 claude plugin validate --strict plugins/fab0/skills
 ```
 
-After changing an agent, a skill an agent loads, or the brief, run `uv run python scripts/check-agents.py`. It costs tokens.
+After changing a skill, a hand-out or a brief, run `uv run python scripts/e2e-triage.py`. It costs tokens.
 
 Before a PR, check that no noun from the predecessor project or from a consuming project appears in the diff, its commit messages or the PR text. Keep the list of those nouns local; never commit it.

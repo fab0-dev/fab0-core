@@ -103,6 +103,15 @@ class GhCli:
         data = self._api(f"repos/{repo}/issues/{number}/dependencies/blocked_by?per_page=100")
         return [{**self._from_api(d), "repo": self._repo_of(d, repo)} for d in data]
 
+    def open_items(self, repo: str, label: str | None, issue_type: str | None) -> list[int]:
+        """The numbers of the open issues with this label and of this type, newest first."""
+        args = ["issue", "list", "--repo", repo, "--state", "open", "--limit", "200", "--json", "number"]
+        if label:
+            args += ["--label", label]
+        if issue_type:
+            args += ["--search", f'type:"{issue_type}"']
+        return [d["number"] for d in json.loads(self._gh(*args) or "[]")]
+
     def fields(self, repo: str, number: int, owner: str, project: int) -> dict:
         """The item's field values on one project board, by field name."""
         repo_owner, name = repo.split("/")
@@ -256,6 +265,16 @@ class GhFake:
             r, n = ref.split("#")
             found.append({**self.issue(r, int(n)), "repo": r})
         return found
+
+    def open_items(self, repo: str, label: str | None, issue_type: str | None) -> list[int]:
+        found = []
+        for ref, d in self.data.get("issues", {}).items():
+            r, n = ref.split("#")
+            if r != repo or d.get("state", "open") != "open":
+                continue
+            if (not label or label in d.get("labels", [])) and (not issue_type or d.get("type") == issue_type):
+                found.append(int(n))
+        return sorted(found, reverse=True)
 
     def fields(self, repo: str, number: int, owner: str, project: int) -> dict:
         return self._raw(repo, number).get("fields", {})

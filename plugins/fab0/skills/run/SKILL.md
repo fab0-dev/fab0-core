@@ -1,79 +1,66 @@
 ---
 name: run
-description: Run a fab0 pipeline for one work item (a run) until it needs a person, is done, or is blocked. The resolver decides every step; this procedure only executes it.
-argument-hint: <run> [--task T] [--take] [--profile P]
+description: Run a fab0 pipeline for one run until it needs a person, is blocked, or is done. The engine decides every step; this procedure only executes what it hands out.
+argument-hint: <run> [--pipeline P] [--profile P] [--unit U]
 disable-model-invocation: true
 ---
 
 # /fab0:run $ARGUMENTS
 
-You are the fab0 orchestrator for this session. **You execute; you don't decide.** `fab0-resolve` (on the Bash `PATH`) decides what happens next. Don't skip, reorder or improvise steps, and don't do a stage's work yourself: agents do it. All GitHub writes follow the `fab0:github` skill; load it now with the Skill tool.
+You execute; you don't decide. `fab0-resolve` (on the Bash `PATH`) says what is due, and its `apply` command does every git and tracker write that can be done exactly. Don't skip, reorder or add work, and don't do a unit's work yourself: its agent, command or tool does.
 
-Arguments: the first is the run id (an issue number). The options are:
-- `--task T`: work only on task T;
-- `--take`: claim task T if someone else has it;
-- `--profile P`: apply profile P to `fab0.yaml`.
+Arguments: the first is the run id: the number of the run's tracker item, or a manual id. Pass `--pipeline` and `--profile` on to every `fab0-resolve` call. `--unit U` goes to `next` only, and limits the hand-outs to that unit.
 
-Pass `--task` and `--profile` on to every `fab0-resolve next` call.
+## Rules
+
+- Never merge, push, open or edit pull requests, or write to the tracker yourself. `apply` does all of it, within the project's merge policy.
+- Never force-push, rebase, stash or discard anyone's changes. If a checkout a hand-out names has changes nobody recorded, stop and ask.
+- Pass every brief verbatim. Don't add to it, shorten it or explain it.
+- Run every `fab0-resolve` command from the home checkout, never from inside a unit's worktree.
+- Write return files outside every checkout, in `<home git common dir>/fab0/returns/<run>/`. `git -C <home path> rev-parse --path-format=absolute --git-common-dir` gives the common dir.
 
 ## Before the loop
 
-1. `fab0-resolve validate`. If it fails, show the errors and stop.
-2. For each repository in its `workspace` with `exists: true`, run `git -C <path> fetch --prune origin`. If a repository doesn't exist locally, say so. The run may still work if the next steps don't touch it.
+1. `fab0-resolve validate`. If it fails, show the errors and stop. Keep its `workspace`: repository names and their local paths.
+2. For each repository with `present: true` and an `origin` remote, run `git -C <path> fetch --prune origin`. Say which repositories are missing; the run may not need them.
 
 ## The loop
 
-Repeat until a step says stop:
+Repeat:
 
-1. Run `fab0-resolve next <run> [--task T] [--profile P]` and read the JSON. Its `workspace` maps repository names to local paths.
-2. Act on `kind`:
-
-**`stage`**: an agent stage to run.
-1. Prepare the branch in every repository listed in `write`:
-   - If the working tree has changes the person made, stop and ask. Never stash or discard them.
-   - If `start_from` is `branch`, run `git checkout <branch>`. If the branch exists only on origin, use `git checkout -b <branch> --track origin/<branch>`.
-   - If `start_from` is `base`, run `git checkout -B <branch> origin/<base>`.
-2. Call the Agent tool with `subagent_type` = `agent`, `model` = `model`, and `prompt` = `brief`, verbatim. Don't add to the brief or summarise it.
-3. Take the JSON object from the agent's final message. If the message is wrapped in a code fence, take its content. Write it to `<home git dir>/fab0/returns/<run>-<stage>[-<task>].json`; `git rev-parse --git-dir` in the home repo gives the git dir. Never write it inside a working tree: that would break the write scope.
-4. Run `fab0-resolve record <run> <stage> [--task T] --return <file>`.
-   - **Exit 4** (refused): show the `violations` and stop. The person decides how to undo them. Then the same `record` can be run again.
-   - **`verified: false`**: say so. The next `next` call hands the stage out again with the errors in its brief.
-5. Commit in every repository in `write`. The subject names the release that handed out this attempt: `<fab0_version>` is the `fab0_version` field of the `next` result from step 1 of the loop, so the stage pull request's commit list shows the release of every attempt:
+1. **Apply.** `fab0-resolve apply <run>`. List what it `applied`. If it fails, show the error and stop. If `kind` is `done`, or `waiting` (the run's pull request waits on a person), go to the end.
+2. **Hand-outs.** `fab0-resolve next <run>`. Take its `handouts`, leaving out those with `executor: action`: `apply` performs actions. If none are left, go to the end.
+3. **Checkouts.** For each hand-out, in the repository each entry of `branches` names:
+   - an entry without `worktree` that doesn't exist: `git -C <path> branch <branch> <from>`. Another hand-out may have created it already; that is fine.
+   - the entry with `worktree`: if that path is already a checkout of `branch`, use it. Otherwise `git -C <path> worktree add <worktree> <branch>` when `exists` is true, or `git -C <path> worktree add -b <branch> <worktree> <from>` when it isn't.
+   - with `sync: true`: `git -C <worktree> merge --no-edit <from>`. If it stops on conflicts (listed in `conflicts`), leave them: the brief tells the agent to resolve them, and the commit after `record` concludes the merge.
+   - a gate hand-out (`gate: true`) names one `worktree` on `branch`: add it the same way if it isn't there.
+4. **Execute**, every hand-out of this round:
+   - **agent** (a unit or a gate): call the Agent tool with `subagent_type` = `agent`, `model` = `model` and `prompt` = `brief`. Send all of the round's Agent calls in one message so they run in parallel, and wait for every one. Take the JSON object from each agent's final message (inside a code fence, take the fence's content) and write it to `<returns>/<unit>.json`, or `<unit>-gate.json` for a gate.
+   - **command**: run `command` with the unit's `worktree` (a gate's `worktree`) as the working directory, and keep its exit code. For a gate, also save its output to `<returns>/<unit>-gate.txt`.
+   - **tool**: call the tool named in `tool` with `with` as its arguments. If this session doesn't have that tool, don't imitate it: report it and stop. Then write the return, valid against `return_schema`: `summary` is one line on what the call did, plus `data` if the schema asks for it, taken from the tool's result.
+5. **Record**, each hand-out:
+   - a unit: `fab0-resolve record <run> <unit> --return <file>`, or `--exit <code>` for a command;
+   - a gate: `fab0-resolve record <run> <unit> --gate --return <file>`, or `--gate --exit <code> --output <file>` for a command.
+   - If it is refused because the return doesn't match its schema, call the same agent once more with the brief followed by the `errors`, and record again. If it is refused again, or refused for any other reason (writes outside the unit's claims, a missing checkout), show the refusal and stop. The person decides how to undo writes; then the same `record` works.
+   - `verified: false` is not a failure of yours: say so and go on. The next round hands the unit out again with the failures in its brief.
+   - If the result lists `outside`, tell the person: files appeared beside the repositories while the unit ran.
+6. **Commit** what `record` wrote, with the work, in the checkout it wrote to (each `worktree` of the unit, or the gate's):
    ```bash
-   git -C <path> add -A && git -C <path> commit -m "<stage>[ <task>] attempt <attempt> (fab0 <fab0_version>): <first line of the summary>"
+   git -C <worktree> add -A && git -C <worktree> commit -m "<unit> attempt <attempt> (fab0 <fab0_version>): <first line of the summary>"
    ```
-6. Update the board (the `fab0:github` skill), then continue the loop.
+   For a gate: `"<unit> gate <attempt>: <decision, or exit code>"`. Don't push; `apply` pushes what it merges, opens a pull request for, or keeps on the ledger branch.
+7. Go back to 1.
 
-**`gate`**: an agent gate to run.
-1. Call the Agent tool with `subagent_type` = `agent`, `model` = `model`, `prompt` = `brief`.
-2. Save the JSON as in the stage case, with a `-gate` suffix on the file name.
-3. Run `fab0-resolve record <run> <stage> [--task T] --gate --return <file>`. If it is refused because the review is invalid, call the gate once more with the errors added after the brief. If it is refused again, stop.
-4. Commit the new ledger entry in the gate's repository (`repo`): `… commit -m "<stage>[ <task>] gate <attempt>: <decision>"`. Then continue the loop.
-
-**`action`**: apply `ops` exactly as the `fab0:github` skill says, in order. Then continue the loop. Actions belong to no one, so anyone may run them.
-
-**`tasks`**: the run is at its tasks, and `runnable` lists the ones this person can run. Without `--task`, work through `runnable` in order: run this same loop with `--task <id>` for each until it stops. Then run `next` without `--task` again. `lanes` says which tasks are independent; run them one after another for now.
-
-**`wait`**: act on `reason`, then stop.
-- `human-gate`, `questions`, `escalated`: push and open or update the pull request, post the questions, and post the handoff comment, all as the `fab0:github` skill says. Tell the person who reviews next, and give the link.
-  - When the result carries `review` and `draft` (a stage with an agent gate), the pull request and the handoff comment state `review.text` verbatim, and the pull request is a draft exactly when `draft` is true: opened as a draft, marked ready, or turned back into a draft as needed. Don't write the sentence or pick the state yourself.
-  - With reason `questions` the gate is not handed out: the pull request is opened as an unreviewed draft, and the questions are posted and the item assigned to the owner, in this same session. A later attempt that the gate decides on makes the same pull request ready and updates its statement.
-  - Running the same wait again with no new attempt, review or input change leaves the pull request's draft state and body as they are, and no step fails because the state is already set.
-  - If GitHub refuses the draft state, still open or update the pull request with the statement, still post the questions and the handoff comment, and say in the report that the pull request couldn't be made a draft.
-- `assigned`: with `--take`, claim the task (`fab0:github`) and continue the loop. Without it, say who has the task and that `--take` claims it.
-- `owner`: say who owns the stage. This person can't run it.
-- `tasks`: list what each task is waiting for.
-
-**`done`**: update the board (Stage `done`), say that the run (or the task) is done, and stop.
-
-**`blocked`**: update the board's Waiting on field with the reason, show the reason, and stop.
+Stop early if a round hands out exactly what the round before handed out, with the same attempts, after they were recorded: something is wrong. Report it.
 
 ## At the end
 
-Report briefly:
-- what ran, with each stage, task, attempt, model, and verified or not;
-- what was opened or updated on GitHub, with links, and for a pull request with a review statement whether it is a draft or ready and what the statement says;
-- any pull request that couldn't be made a draft;
-- what the run waits for now, and on whom.
+1. `fab0-resolve status <run>`.
+2. For each unit now `done` whose checkout lies under `<common dir>/fab0/worktrees/`, remove it with `git -C <path> worktree remove <worktree>`, if it is clean. Never remove a checkout the person made.
+3. Report briefly:
+   - what ran: each unit or gate, its executor, attempt and model, and whether it was verified or what the gate decided;
+   - what `apply` did, with links to pull requests and items;
+   - what the run waits for now, and on whom: units `waiting` (a human gate, questions, an escalation) and units `blocked` with their reasons. Leave out units that only wait their turn (`order`, `data`, `claim`, `limit`).
 
 Then stop. Don't start other runs.
