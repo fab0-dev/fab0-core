@@ -2,6 +2,13 @@
 
 The `fab0` marketplace and core plugin. The product's home repo is `fab0-dev/fab0`, a sibling checkout; its `CLAUDE.md` holds the working rules and principles that apply here too.
 
+## Refactor mode
+
+fab0 is being refactored; [REFACTOR.md](https://github.com/fab0-dev/fab0/blob/main/REFACTOR.md) in the home repo is the plan, the tracker and the decision log, and it overrides this file where they disagree. Until its step R8:
+- don't release: no version bump, no tag, so auto-update can't hand projects a half-built core;
+- don't use `/fab0:run` here; work by hand, one refactor step per PR;
+- the layout and conventions below describe 0.5.0, and steps R1 to R4 change them.
+
 ## Layout
 
 - `plugins/fab0/` is what users install. Keep it free of tests and development files.
