@@ -1,42 +1,48 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "fab0 ledger entry (work/{run}/ledger/<stage>[-<task>]-<attempt>[-gate].yaml)",
+  "title": "fab0 ledger entry, schema 2 ({ledger.path}/<step>[-<unit>]-<attempt>[-gate].yaml)",
+  "description": "One attempt of a step, or one gate decision on it. Append-only, written by the engine, and carried to the base branch by merges.",
   "type": "object",
-  "required": ["stage", "attempt", "actor", "model", "gate"],
+  "required": ["step", "attempt", "executor", "actor", "branch", "base", "gate"],
   "additionalProperties": false,
   "properties": {
-    "stage": {"type": "string"},
-    "task": {"type": "string"},
+    "step": {"type": "string", "minLength": 1},
+    "unit": {"type": "string", "minLength": 1},
     "attempt": {"type": "integer", "minimum": 1},
-    "actor": {"type": "string"},
-    "model": {"type": "string"},
-    "branch": {"type": "string"},
+    "executor": {"enum": ["agent", "action", "command", "tool"]},
+    "actor": {"description": "The tracker user who ran it.", "type": "string", "minLength": 1},
+    "model": {"type": "string", "minLength": 1},
+    "branch": {"description": "The branch the attempt was made on.", "type": "string", "minLength": 1},
+    "base": {
+      "description": "The parent branch and the commit the inputs were read at.",
+      "type": "object",
+      "required": ["branch", "sha"],
+      "additionalProperties": false,
+      "properties": {"branch": {"type": "string", "minLength": 1}, "sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"}}
+    },
     "inputs": {"$ref": "#/$defs/hashes"},
     "outputs": {"$ref": "#/$defs/hashes"},
+    "claims": {"description": "The paths the unit claimed.", "type": "array", "items": {"type": "string", "minLength": 1}},
     "verify": {
       "type": "object",
-      "additionalProperties": {
-        "oneOf": [{"const": "pass"}, {"type": "array", "minItems": 1, "items": {"type": "string"}}]
-      }
+      "additionalProperties": {"oneOf": [{"const": "pass"}, {"type": "array", "minItems": 1, "items": {"type": "string"}}]}
     },
     "gate": {
       "type": "object",
       "required": ["type"],
       "additionalProperties": false,
       "properties": {
-        "type": {"enum": ["none", "human", "agent"]},
+        "type": {"enum": ["none", "human", "auto"]},
         "agent": {"type": "string"},
-        "decision": {"enum": ["approve", "escalate", "reject"]}
+        "command": {"type": "string"},
+        "decision": {"enum": ["approve", "reject", "escalate"]},
+        "merge": {"enum": ["auto", "human"]},
+        "into": {"description": "The branch the gate merges into.", "type": "string"}
       }
     },
     "summary": {"type": "string"},
     "questions": {"type": "array", "items": {"type": "string"}},
-    "review": {"type": "object"}
+    "verdict": {"type": "object"}
   },
-  "$defs": {
-    "hashes": {
-      "type": "object",
-      "additionalProperties": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
-    }
-  }
+  "$defs": {"hashes": {"type": "object", "additionalProperties": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}}}
 }

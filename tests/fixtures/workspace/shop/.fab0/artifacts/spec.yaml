@@ -1,6 +1,0 @@
-artifact: spec
-format: markdown
-location: {repo: home, path: "specs/{run}.md"}
-verify:
-  - sections: [Scenarios]
-keep: durable

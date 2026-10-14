@@ -1,2 +1,0 @@
-def health():
-    return "ok"

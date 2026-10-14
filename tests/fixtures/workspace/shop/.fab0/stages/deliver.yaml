@@ -1,4 +1,0 @@
-stage: deliver
-action: deliver
-inputs: [spec]
-gate: human

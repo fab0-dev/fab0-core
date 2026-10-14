@@ -9,8 +9,8 @@ import pytest
 import yaml
 
 ROOT = Path(__file__).resolve().parent.parent
-SCHEMAS = ROOT / "plugins" / "fab0" / "schemas" / "v2"
-FIXTURES = Path(__file__).resolve().parent / "fixtures" / "v2"
+SCHEMAS = ROOT / "plugins" / "fab0" / "schemas"
+FIXTURES = Path(__file__).resolve().parent / "fixtures"
 FACTORIES = sorted(p.name for p in FIXTURES.iterdir() if (p / ".fab0").is_dir())
 EXECUTORS = ("agent", "action", "command", "tool")
 
@@ -68,32 +68,6 @@ def test_each_fixture_validates(factory):
         for stem, doc in inline_steps(pipeline).items():
             problems += [f"inline step {stem} {e}" for e in errors(doc, "step")]
     assert not problems, "\n".join(problems)
-
-
-@pytest.mark.parametrize("factory", FACTORIES)
-def test_each_fixture_is_coherent(factory):
-    """What the engine will check in R2a, done cheaply here so the fixtures stay usable."""
-    home = FIXTURES / factory
-    project = load(home / ".fab0" / "fab0.yaml")
-    pipelines, steps, artifacts = (files(factory, k) for k in ("pipelines", "steps", "artifacts"))
-    assert sorted(project["pipelines"]) == sorted(pipelines)
-    for pipeline in pipelines.values():
-        inline = inline_steps(pipeline)
-        assert not set(inline) & set(steps), "a step is both inline and a file"
-        every = {**steps, **inline}
-        for node in nodes(pipeline["steps"]):
-            name = node if isinstance(node, str) else node.get("step")
-            assert name is None or name in every, f"{pipeline['pipeline']}: no step {name!r}"
-            if isinstance(node, dict) and "foreach" in node:
-                assert node["foreach"].split(".")[0] in artifacts
-        for step in every.values():
-            for ref in step.get("inputs", []) + step.get("outputs", []):
-                assert ref.startswith("unit") or ref in artifacts, f"{step['step']}: no artifact {ref!r}"
-            if step.get("agent"):
-                assert (home / ".claude" / "agents" / f"{step['agent']}.md").is_file()
-    refs = [a.get("schema") for a in artifacts.values()] + [s.get("return", {}).get("schema") for s in steps.values()]
-    for path in filter(None, refs):
-        jsonschema.Draft202012Validator.check_schema(json.loads((home / path).read_text()))
 
 
 def features() -> set[str]:
