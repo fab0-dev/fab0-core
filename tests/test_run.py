@@ -139,7 +139,7 @@ def test_the_first_step_is_ready_and_the_rest_wait_on_it(story):
             "repo": "home",
             "branch": "fab0/412/spec",
             "from": "fab0/412/base",
-            "exists": False,
+            "exists": True,  # `next` claimed it by creating the branch (D46)
             "worktree": h["branches"][0]["worktree"],
         }
     ]

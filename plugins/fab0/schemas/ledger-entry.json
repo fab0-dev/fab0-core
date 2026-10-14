@@ -44,7 +44,12 @@
     "questions": {"type": "array", "items": {"type": "string"}},
     "verdict": {"type": "object"},
     "data": {"description": "The return's structured `data`, which later steps read as `{<step>.<field>}`."},
-    "exit": {"description": "A command step's exit code.", "type": "integer"}
+    "exit": {"description": "A command step's exit code.", "type": "integer"},
+    "rework": {
+      "description": "Why this attempt was made, when it isn't the first: `stale`, `missing`, `verify`, `rejected`, `conflict`, `checks`.",
+      "type": "array",
+      "items": {"type": "string"}
+    }
   },
   "$defs": {"hashes": {"type": "object", "additionalProperties": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}}}
 }

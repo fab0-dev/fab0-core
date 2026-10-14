@@ -23,9 +23,9 @@ STORY_GH = {
 }
 
 
-def git(path: Path, *args: str) -> str:
+def git(path: Path, *args: str, check: bool = True) -> str:
     run = subprocess.run(["git", "-C", str(path), *args], capture_output=True, text=True)
-    assert run.returncode == 0, f"git {' '.join(args)}: {run.stderr}"
+    assert run.returncode == 0 or not check, f"git {' '.join(args)}: {run.stderr}"
     return run.stdout.strip()
 
 

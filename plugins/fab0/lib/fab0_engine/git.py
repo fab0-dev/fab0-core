@@ -51,6 +51,15 @@ class Repo:
     def is_ancestor(self, a: str, b: str) -> bool:
         return self._git("merge-base", "--is-ancestor", a, b).returncode == 0
 
+    def merge_conflicts(self, base: str, head: str) -> list[str]:
+        """The files that merging `head` into `base` would conflict on; empty when it merges cleanly."""
+        run = self._git("merge-tree", "--write-tree", "--name-only", "--no-messages", base, head)
+        if run.returncode == 1:
+            return [line for line in run.stdout.decode().splitlines()[1:] if line]
+        if run.returncode:
+            raise Fail(EXIT_ERROR, f"git merge-tree failed in {self.name}: {run.stderr.decode().strip()}")
+        return []
+
     def removed_at(self, ref: str, path: str) -> str | None:
         """The commit before the one that removed `path` on `ref`'s history, if one did."""
         run = self._git("log", "-1", "--format=%H", "--diff-filter=D", ref, "--", path)
@@ -171,6 +180,21 @@ class Writer:
             raise Fail(EXIT_ERROR, f"{branch} is checked out with changes in {tree}; commit or stash them first")
         else:
             self.must("merge", "-q", "--ff-only", sha, cwd=tree)
+
+    def claim(self, branch: str, sha: str, who: str) -> bool:
+        """Create `branch` on the remote, only if nobody has: the claim that keeps two machines from running
+        one unit (D46). The branch starts with an empty commit naming who took it, so two claims never push the
+        same commit, which git would accept as already there. Without a remote, the local branch is the claim."""
+        tree = self.must("rev-parse", f"{sha}^{{tree}}")
+        mine = self.must("commit-tree", tree, "-p", sha, "-m", f"fab0: {who} takes {branch}")
+        if self.has_remote():
+            lease = f"--force-with-lease=refs/heads/{branch}:"  # an empty expected value: the branch must not exist
+            if self.git("push", "-q", lease, "origin", f"{mine}:refs/heads/{branch}").returncode:
+                return False
+        if not self.repo.ref_exists(branch):
+            self.must("branch", branch, mine)
+        self.repo._fresh.clear()
+        return True
 
     def create_branch(self, branch: str, start: str) -> None:
         self.must("branch", branch, start)

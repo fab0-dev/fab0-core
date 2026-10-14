@@ -134,17 +134,17 @@ class GhCli:
     def diff(self, repo: str, number: int) -> str:
         return self._gh("pr", "diff", str(number), "--repo", repo)
 
-    def checks(self, repo: str, number: int) -> str:
-        """`pass` (or no checks), `pending` or `fail`, for a pull request's required checks."""
-        run = subprocess.run(
-            ["gh", "pr", "checks", str(number), "--repo", repo, "--required", "--json", "bucket"],
-            capture_output=True,
-            text=True,
-        )
+    def checks(self, repo: str, number: int) -> tuple[str, list[str]]:
+        """`pass` (or no checks), `pending` or `fail` for a pull request's required checks, and the failing ones."""
+        args = ["gh", "pr", "checks", str(number), "--repo", repo, "--required", "--json", "bucket,name"]
+        run = subprocess.run(args, capture_output=True, text=True)
         if run.returncode not in (0, 1, 8) or not run.stdout.strip():
-            return "pass"  # no required checks
-        buckets = {c["bucket"] for c in json.loads(run.stdout)}
-        return "fail" if buckets & {"fail", "cancel"} else "pending" if "pending" in buckets else "pass"
+            return "pass", []  # no required checks
+        found = json.loads(run.stdout)
+        failed = [c["name"] for c in found if c["bucket"] in ("fail", "cancel")]
+        if failed:
+            return "fail", failed
+        return ("pending" if any(c["bucket"] == "pending" for c in found) else "pass"), []
 
     # ------------------------------------------------------------ writes, for apply
 
@@ -265,8 +265,9 @@ class GhFake:
     def diff(self, repo: str, number: int) -> str:
         return self._pull(repo, number).get("diff", "")
 
-    def checks(self, repo: str, number: int) -> str:
-        return self._pull(repo, number).get("checks", "pass")
+    def checks(self, repo: str, number: int) -> tuple[str, list[str]]:
+        p = self._pull(repo, number)
+        return p.get("checks", "pass"), p.get("failed_checks", [])
 
     # ------------------------------------------------------------ writes, for apply
 

@@ -24,7 +24,7 @@ from pathlib import Path
 from .apply import apply as apply_run
 from .errors import EXIT_ERROR, EXIT_INVALID, EXIT_OK, EXIT_REFUSED, EXIT_USAGE, Fail
 from .gates import gate_handout, record_gate, save_gate_pending
-from .handout import action_handout, handout, record, save_pending
+from .handout import action_handout, claim, handout, record, save_pending
 from .schedule import Run
 from .tracker import make_tracker
 from .version import read_version
@@ -163,6 +163,9 @@ def cmd_next(args) -> dict:
             if unit.state == "ready":
                 handouts.append(action_handout(run, unit))
         elif unit.step is not None and unit.state in ("ready", "running"):
+            if not claim(run, unit):
+                unit.state, unit.reason = "running", {"claimed": "elsewhere"}
+                continue
             out = handout(run, unit)
             save_pending(run, unit, out)
             handouts.append(out)
@@ -173,6 +176,7 @@ def cmd_next(args) -> dict:
     if args.unit and not handouts:
         found = next((u.summary() for u in run.units if u.id == args.unit), None)
         raise Fail(EXIT_REFUSED, f"{args.unit} is not ready", unit=found)
+    result["units"] = [u.summary() for u in run.units]  # claims made just now may have changed a state
     return {**result, "handouts": handouts}
 
 

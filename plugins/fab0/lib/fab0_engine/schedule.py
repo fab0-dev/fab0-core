@@ -73,6 +73,7 @@ class Unit:
     gates: dict = field(default_factory=dict)  # attempt -> the auto gate's ledger entry
     gate_inputs: str | None = None  # a gated block: the hash of its units' attempts its gate must judge
     lifecycle: str | None = None  # `onStart` or `onEnd`, for an action of the pipeline or a block
+    warnings: list = field(default_factory=list)
     elements: list | None = None  # a foreach's elements, for its own actions
 
     @property
@@ -85,6 +86,8 @@ class Unit:
 
     def summary(self) -> dict:
         out = {"unit": self.id, "label": self.label, "state": self.state}
+        if self.warnings:
+            out["warnings"] = self.warnings
         if self.step:
             out["step"] = self.step["step"]
         if self.element_id:
@@ -786,7 +789,57 @@ class Run:
             unit.state, unit.reason = ("done", None) if done else ("waiting", {"gate": "human" if human else "merge"})
             return
         merge = "merge" if unit.gate == "none" or (auto is not None and unit.gate.get("merge") == "auto") else "human"
+        if self.merge_trouble(unit, entry, merge):
+            return
         unit.state, unit.reason = "waiting", {"gate": merge}
+
+    def merge_trouble(self, unit: Unit, entry: dict, merge: str) -> bool:
+        """A unit ready to merge whose branch conflicts with its parent, or whose required checks fail, goes
+        back to its producer once with the details; if the attempt made to fix it has the same trouble, a
+        person decides (D45)."""
+        trouble = {}
+        conflicts = self.conflicts(unit)
+        if conflicts:
+            trouble["conflict"] = conflicts
+        elif merge == "merge" and unit.auto is not None:
+            failing = self.failing_checks(unit)
+            if failing:
+                trouble["checks"] = failing
+        if not trouble:
+            return False
+        kind = next(iter(trouble))
+        if kind in entry.get("rework", []):
+            again = "its branch conflicts with its parent again" if kind == "conflict" else "its checks fail again"
+            unit.state, unit.reason = "waiting", {"escalated": again}
+            return True
+        unit.rework = {**trouble, "previous": entry.get("summary", "")}
+        unit.attempt += 1
+        running = (self.pending_dir() / f"{unit.id}.json").is_file()
+        unit.state, unit.reason = ("running" if running else "ready"), {"rework": [kind]}
+        return True
+
+    def conflicts(self, unit: Unit) -> dict[str, list[str]]:
+        """Per repository, the files a unit's branch would conflict on when merged into its parent."""
+        found = {}
+        for name in dict.fromkeys(unit.write or [unit.ledger_repo]):
+            repo = self.repos[name]
+            base, head = repo.fresh(self.parent_in(repo, unit.ctx.parent)), repo.fresh(unit.branch)
+            if base and head and not repo.is_ancestor(head, base):
+                files = repo.merge_conflicts(base, head)
+                if files:
+                    found[name] = files
+        return found
+
+    def failing_checks(self, unit: Unit) -> dict[str, list[str]]:
+        found = {}
+        for name in dict.fromkeys(unit.write or [unit.ledger_repo]):
+            repo = self.repos[name]
+            pr = self.tracker.pull(repo.github, unit.branch, self.parent_in(repo, unit.ctx.parent))
+            if pr is not None and pr["state"] == "open":
+                state, failed = self.tracker.checks(repo.github, pr["number"])
+                if state == "fail":
+                    found[f"{repo.github}#{pr['number']}"] = failed
+        return found
 
     def rework(self, unit: Unit, entry: dict) -> dict:
         """Why the recorded attempt no longer stands: its checks failed, its inputs changed, or an output it
@@ -834,7 +887,55 @@ class Run:
 
     # ------------------------------------------------------------ claims and limits
 
+    def other_claims(self) -> list[tuple[str, str, dict]]:
+        """The claims of other open runs: (run, unit, {repo: [globs]}) from the latest ledger entry on each of
+        their unit branches that isn't in its repository's base yet (D47)."""
+        unit_pattern = re.compile(
+            "^"
+            + re.escape(self.unit_template).replace(r"\{run\}", "(?P<run>[^/]+)").replace(r"\{unit\}", "(?P<unit>.+)")
+            + "$"
+        )
+        run_template = self.w.git_policy(self.p).get("branches", {}).get("run", "fab0/{run}/base")
+        ledger_path = self.w.project.get("ledger", {}).get("path", DEFAULT_PATH)
+        found = []
+        for repo in self.repos.values():
+            if not repo.exists():
+                continue
+            base = repo.fresh(repo.base)
+            refs = repo.out("for-each-ref", "--format=%(refname:short)", "refs/heads", "refs/remotes/origin")
+            seen = set()
+            for ref in refs.splitlines():
+                branch = ref.removeprefix("origin/")
+                m = unit_pattern.match(branch)
+                if not m or m["run"] == self.run or branch in seen or branch == run_template.replace("{run}", m["run"]):
+                    continue
+                seen.add(branch)
+                head = repo.fresh(branch)
+                if base and repo.is_ancestor(head, base):
+                    continue
+                folder = ledger_path.replace("{run}", m["run"])
+                entries = sorted(attempts(repo.names(head, folder), m["unit"]))
+                if not entries:
+                    continue
+                raw = repo.read_file(head, f"{folder}/{entry_name(m['unit'], entries[-1])}")
+                claims: dict[str, list[str]] = {}
+                for item in (parse(raw, branch).get("claims") or []) if raw else []:
+                    name, _, glob = item.partition(":")
+                    claims.setdefault(name, []).append(glob)
+                if claims:
+                    found.append((m["run"], m["unit"], claims))
+        return found
+
     def apply_claims(self) -> None:
+        policy = self.w.project.get("parallel", {}).get("cross_run", "warn")
+        ready = [u for u in self.units if u.step and u.state == "ready" and u.claims]
+        others = self.other_claims() if ready else []
+        for u in ready:
+            hits = [f"run {r}, {unit}" for r, unit, claims in others if overlap(claims, u.claims)]
+            if hits and policy == "block":
+                u.state, u.reason = "blocked", {"cross-run": hits}
+            elif hits:
+                u.warnings = [f"claims overlap with {h}" for h in hits]
         holders: list[Unit] = []
         for u in self.units:
             if not u.step or u.state not in ("ready", "running", "waiting", "blocked") or not u.claims:
