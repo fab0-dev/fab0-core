@@ -4,6 +4,8 @@ The `fab0` plugin marketplace and the core `fab0` plugin for Claude Code.
 
 fab0 runs software delivery as pipelines of Claude Code agents. The pipelines are wired in short YAML files in a project's `.fab0/` directory and carried on GitHub. The project's home repo is [`fab0-dev/fab0`](https://github.com/fab0-dev/fab0).
 
+> **Refactor in progress.** fab0 is being rebuilt from a delivery factory into a toolkit for building factories. This plugin is frozen at 0.5.0, and no release is made until the refactor's last step. The plan and progress are in [REFACTOR.md](https://github.com/fab0-dev/fab0/blob/main/REFACTOR.md).
+
 ## Contents
 
 | Path | What |
