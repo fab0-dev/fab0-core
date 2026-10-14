@@ -27,7 +27,7 @@ fab0 is a toolkit for building and operating software factories. A factory is on
 
 `fab0-resolve` then sits on the Bash `PATH` of every Claude Code session, and `/fab0:run <issue>` and `/fab0:inbox` are available. It needs [`uv`](https://docs.astral.sh/uv/) and an authenticated [`gh`](https://cli.github.com/) with the `project` scope (`gh auth refresh -s project`).
 
-A project is wired by copying an example factory into its `.fab0/` directory, with the agents and skills it uses. Examples live in `fab0-dev/fab0-recipes`, which becomes `fab0-dev/fab0-examples` during the refactor.
+A project is wired by copying an example factory into its `.fab0/` directory, with the agents and skills it uses. Examples live in [`fab0-dev/fab0-examples`](https://github.com/fab0-dev/fab0-examples).
 
 ## Releases
 
