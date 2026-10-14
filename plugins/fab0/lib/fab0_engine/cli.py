@@ -42,8 +42,19 @@ def find_project(arg: str | None) -> Path:
     here = Path.cwd().resolve()
     for folder in (here, *here.parents):
         if (folder / ".fab0" / "fab0.yaml").is_file():
-            return folder
+            return main_checkout(folder)
     raise Fail(EXIT_USAGE, f"no .fab0/fab0.yaml in {here} or above it; pass --project")
+
+
+def main_checkout(folder: Path) -> Path:
+    """The main checkout of the repository `folder` is in. A unit's worktree holds its branch's copy of the
+    wiring, which may be older than the project's; the main checkout's governs the run (from R6)."""
+    run = subprocess.run(["git", "-C", str(folder), "worktree", "list", "--porcelain"], capture_output=True, text=True)
+    first = next((line for line in run.stdout.splitlines() if line.startswith("worktree ")), None)
+    if run.returncode or first is None:
+        return folder
+    main = Path(first.removeprefix("worktree ")).resolve()
+    return main if main != folder and (main / ".fab0" / "fab0.yaml").is_file() else folder
 
 
 def load_wiring(args) -> Wiring:

@@ -17,6 +17,7 @@ Arguments: the first is the run id: the number of the run's tracker item, or a m
 - Never force-push, rebase, stash or discard anyone's changes. If a checkout a hand-out names has changes nobody recorded, stop and ask.
 - Pass every brief verbatim. Don't add to it, shorten it or explain it.
 - Run every `fab0-resolve` command from the home checkout, never from inside a unit's worktree.
+- If a result carries `warnings`, show them. If one says the home checkout isn't on the base branch, stop and ask the person: that checkout's wiring may not be the project's.
 - Write return files outside every checkout, in `<home git common dir>/fab0/returns/<run>/`. `git -C <home path> rev-parse --path-format=absolute --git-common-dir` gives the common dir.
 
 ## Before the loop

@@ -131,15 +131,24 @@ class GhCli:
         data = self._api(f"repos/{repo}/issues/{number}/comments?per_page=100")
         return [{"id": d["id"], "body": d.get("body") or "", "user": (d.get("user") or {}).get("login")} for d in data]
 
+    def pulls(self, repo: str, branch: str, base: str) -> list[dict]:
+        """Every pull request from `branch` into `base`, in any state, oldest first."""
+        owner = repo.split("/")[0]
+        data = self._api(f"repos/{repo}/pulls?state=all&head={owner}:{branch}&base={base}&per_page=100") or []
+        return [
+            {
+                "number": d["number"],
+                "state": "merged" if d.get("merged_at") else d["state"],
+                "draft": bool(d.get("draft")),
+                "body": d.get("body") or "",
+            }
+            for d in sorted(data, key=lambda p: p["number"])
+        ]
+
     def pull(self, repo: str, branch: str, base: str) -> dict | None:
         """The newest pull request from `branch` into `base`, in any state."""
-        owner = repo.split("/")[0]
-        data = self._api(f"repos/{repo}/pulls?state=all&head={owner}:{branch}&base={base}&per_page=100")
-        if not data:
-            return None
-        d = max(data, key=lambda p: p["number"])
-        state = "merged" if d.get("merged_at") else d["state"]
-        return {"number": d["number"], "state": state, "draft": bool(d.get("draft")), "body": d.get("body") or ""}
+        found = self.pulls(repo, branch, base)
+        return found[-1] if found else None
 
     def reviews(self, repo: str, number: int) -> list[dict]:
         data = self._api(f"repos/{repo}/pulls/{number}/reviews?per_page=100")
@@ -286,18 +295,22 @@ class GhFake:
         pulls = [p for p in self.data.get("pulls", {}).get(repo, []) if p["number"] == number]
         return pulls[0].get("comments", []) if pulls else []
 
-    def pull(self, repo: str, branch: str, base: str) -> dict | None:
+    def pulls(self, repo: str, branch: str, base: str) -> list[dict]:
         pulls = self.data.get("pulls", {}).get(repo, [])
         found = [p for p in pulls if p["branch"] == branch and p.get("base", base) == base]
-        if not found:
-            return None
-        p = max(found, key=lambda p: p["number"])
-        return {
-            "number": p["number"],
-            "state": p.get("state", "open"),
-            "draft": p.get("draft", False),
-            "body": p.get("body", ""),
-        }
+        return [
+            {
+                "number": p["number"],
+                "state": p.get("state", "open"),
+                "draft": p.get("draft", False),
+                "body": p.get("body", ""),
+            }
+            for p in sorted(found, key=lambda p: p["number"])
+        ]
+
+    def pull(self, repo: str, branch: str, base: str) -> dict | None:
+        found = self.pulls(repo, branch, base)
+        return found[-1] if found else None
 
     def _pull(self, repo: str, number: int) -> dict:
         return next(p for p in self.data.get("pulls", {}).get(repo, []) if p["number"] == number)

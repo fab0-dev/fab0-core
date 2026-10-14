@@ -10,7 +10,7 @@ from __future__ import annotations
 from .templates import render
 
 RUN_LEVEL = ("git.run-branch", "git.sync-base", "git.remove-run-artifacts", "pr.open-run", "pr.ready", "pr.merge")
-FOREACH_ONLY = ("tracker.child.sync",)
+FOREACH_ONLY = ("tracker.child.sync", "tracker.child.close")
 
 
 def written(run) -> list:
@@ -42,6 +42,8 @@ def check(run, name: str, args: dict, ctx, elements: list | None = None) -> str 
     lookup = run.lookup(ctx)
     if name == "tracker.child.sync":
         return check_children(run, args, ctx, elements or [])
+    if name == "tracker.child.close":
+        return check_closed(run, args, ctx, elements or [])
     args = render(args, lookup)
     if name.startswith(("git.", "pr.")) and run.run_branch is None:
         return None  # flat branching: no run branch, no run pull request
@@ -142,3 +144,13 @@ def check_children(run, args: dict, ctx, elements: list) -> str | None:
     items = element_items(run, args, ctx, elements)
     missing = [e["id"] for e in elements if e["id"] not in items]
     return f"no sub-issue for {', '.join(missing)}" if missing else None
+
+
+def check_closed(run, args: dict, ctx, elements: list) -> str | None:
+    """Every element's item is closed. Unit pull requests merge into the run branch, which closes nothing, so a
+    foreach's onEnd closes its items itself (from R6)."""
+    if run.item() is None:
+        return "the run has no tracker item"
+    items = element_items(run, args, ctx, elements, run.children())
+    still = [e["id"] for e in elements if e["id"] in items and items[e["id"]]["state"] != "closed"]
+    return f"open: {', '.join(still)}" if still else None

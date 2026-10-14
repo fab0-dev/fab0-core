@@ -237,6 +237,9 @@ class Run:
         self.apply_claims()
         self.apply_limits()
         out["units"] = [u.summary() for u in self.units]
+        on = self.home.out("branch", "--show-current").strip()
+        if on and on != self.home.base:  # from R6: its .fab0/ may not be the project's current wiring
+            out["warnings"] = [f"the home checkout is on {on}, not {self.home.base}; its .fab0/ wiring is the one used"]
         if self.run_branch:
             out["branch"] = self.run_branch
         if not ended:
@@ -971,6 +974,9 @@ class Run:
         now = input_hashes(self, unit)
         before = entry.get("inputs", {})
         stale = sorted(k for k in now.keys() | before.keys() if now.get(k) != before.get(k))
+        if stale and self.ledger_branch is None and self.on_branch(unit, unit.ctx.parent):
+            # merged: its own pull request's reviews were the gate, and the merge decided (D34, D61)
+            stale = [k for k in stale if not self.own_pull_input(k)]
         if stale:
             why["stale"] = stale
         missing = [n for n in entry.get("outputs", {}) if not self.output_exists(unit, n)]
@@ -979,6 +985,10 @@ class Run:
         if why:
             why["previous"] = entry.get("summary", "")
         return why
+
+    def own_pull_input(self, name: str) -> bool:
+        art = self.w.artifacts.get(name, {})
+        return art.get("kind") == "pr" and art["pr"].get("of", "run") == "unit"
 
     def output_exists(self, unit: Unit, name: str) -> bool:
         repo, path = self.artifact_location(name, unit.ctx)

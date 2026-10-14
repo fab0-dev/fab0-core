@@ -264,7 +264,8 @@ class Wiring:
             found.append("owner repo-owner")
         for name in step.get("inputs", []) + step.get("outputs", []):
             art = self.artifacts.get(name, {})
-            if "{unit}" in art.get("file", {}).get("path", "") or art.get(art.get("kind"), {}).get("of") == "unit":
+            # a unit's own pull request exists for every step; a unit's tracker item only for a foreach element
+            if "{unit}" in art.get("file", {}).get("path", "") or art.get("issue", {}).get("of") == "unit":
                 found.append(f"artifact '{name}', which is per unit")
         return found
 
@@ -335,8 +336,10 @@ class Pipeline:
             self.w.check_action(self.where, f"{at}[{i}]", name)
             if name in RUN_LEVEL and place != "pipeline":
                 self.error(f"{at}[{i}]: {name} acts on the whole run; it belongs in the pipeline's onStart or onEnd")
-            if name in FOREACH_ONLY and not (place == "foreach" and at.endswith("onStart")):
+            if name == "tracker.child.sync" and not (place == "foreach" and at.endswith("onStart")):
                 self.error(f"{at}[{i}]: {name} makes an item per element; it belongs in a foreach's onStart")
+            if name == "tracker.child.close" and not (place == "foreach" and at.endswith("onEnd")):
+                self.error(f"{at}[{i}]: {name} closes the elements' items; it belongs in a foreach's onEnd")
             if not isinstance(action, str):
                 self._check_templates(f"{at}[{i}]", action[name])
 

@@ -126,16 +126,21 @@ def pr_view(run, name: str, ctx, unit=None) -> View:
     else:
         repo = run.home
         head, base = run.run_branch, repo.base
-    pr = run.tracker.pull(repo.github, head, base) if run.tracker and head else None
+    pulls = run.tracker.pulls(repo.github, head, base) if run.tracker and head else []
+    pr = pulls[-1] if pulls else None
     if part == "reviews":
-        found = run.tracker.reviews(repo.github, pr["number"]) if pr else []
+        # every pull request of the branch: one merged at an older attempt keeps its reviews (from R6)
         value = [
-            {"state": r["state"], "user": r["user"], "body": r["body"]} for r in found if r["state"] in REVIEW_STATES
+            {"state": r["state"], "user": r["user"], "body": r["body"]}
+            for p in pulls
+            for r in run.tracker.reviews(repo.github, p["number"])
+            if r["state"] in REVIEW_STATES
         ]
         if not value:
             return View(sha_json([]), "No reviews ask for changes.")
         lines = "\n\n".join(f"**{r['user']}** ({r['state'].lower().replace('_', ' ')}):\n\n{r['body']}" for r in value)
-        return View(sha_json(value), f"Reviews on {repo.github}#{pr['number']}:\n\n{lines}")
+        numbers = ", ".join(f"{repo.github}#{p['number']}" for p in pulls)
+        return View(sha_json(value), f"Reviews on {numbers}, oldest first:\n\n{lines}")
     if pr is None:
         return View(None, "There is no pull request yet.")
     value = pr["body"] if part == "body" else run.tracker.diff(repo.github, pr["number"])

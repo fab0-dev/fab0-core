@@ -4,6 +4,7 @@ GIT = ("git.run-branch", "git.sync-base", "git.remove-run-artifacts")
 PR = ("pr.open-run", "pr.ready", "pr.merge", "pr.comment")
 TRACKER = (
     "tracker.child.sync",
+    "tracker.child.close",
     "tracker.assign",
     "tracker.field",
     "tracker.label",
