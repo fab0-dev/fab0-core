@@ -91,6 +91,14 @@ def rework_lines(unit: Unit) -> list[str]:
     for name, errors in why.get("verify", {}).items():
         lines.append(f"- {name} failed its checks:")
         lines += [f"  - {e}" for e in errors]
+    rejected = why.get("rejected")
+    if rejected is not None:
+        lines.append("- The gate rejected it:")
+        lines += [f"  - {r}" for r in rejected.get("reasons", [])]
+        for f in rejected.get("findings", []):
+            where = f" ({f['location']})" if f.get("location") else ""
+            check = f"{f['check']}: " if f.get("check") else ""
+            lines.append(f"  - {check}{f['message']}{where}")
     if "previous" in why:
         lines += ["", "What the previous attempt said it did:", "", why["previous"]]
     return lines + [""]

@@ -3,7 +3,7 @@
   validate              check the project's .fab0/ wiring (schema 2)
   status RUN            every unit of a run and its state; read-only
   next RUN              the same, and a hand-out for every unit that is ready or running
-  record RUN UNIT       check a unit's result and write its ledger entry
+  record RUN UNIT       check a unit's result, or with --gate its gate's, and write the ledger entry
   --version             the fab0 release of this engine
 
 `apply` comes in step R3 and `inbox` in R4 of the refactor.
@@ -20,6 +20,7 @@ import subprocess
 from pathlib import Path
 
 from .errors import EXIT_ERROR, EXIT_INVALID, EXIT_OK, EXIT_REFUSED, EXIT_USAGE, Fail
+from .gates import gate_handout, record_gate, save_gate_pending
 from .handout import handout, record, save_pending
 from .schedule import Run
 from .tracker import make_tracker
@@ -113,13 +114,16 @@ def cmd_next(args) -> dict:
     result = run.evaluate()
     handouts = []
     for unit in run.units:
-        if unit.step is None or unit.state not in ("ready", "running"):
-            continue
         if args.unit and unit.id != args.unit:
             continue
-        out = handout(run, unit)
-        save_pending(run, unit, out)
-        handouts.append(out)
+        if unit.step is not None and unit.state in ("ready", "running"):
+            out = handout(run, unit)
+            save_pending(run, unit, out)
+            handouts.append(out)
+        elif unit.state == "waiting" and unit.auto and (unit.reason or {}).get("gate") in ("gate", "running"):
+            out = gate_handout(run, unit)
+            save_gate_pending(run, unit, out)
+            handouts.append(out)
     if args.unit and not handouts:
         found = next((u.summary() for u in run.units if u.id == args.unit), None)
         raise Fail(EXIT_REFUSED, f"{args.unit} is not ready", unit=found)
@@ -135,6 +139,9 @@ def cmd_record(args) -> dict:
         except (OSError, ValueError) as exc:
             raise Fail(EXIT_USAGE, f"--return {args.return_file}: {exc}") from None
     run.evaluate()
+    if args.gate:
+        output = Path(args.output).read_text(errors="replace") if args.output else None
+        return record_gate(run, args.unit, returned, args.exit, output)
     return record(run, args.unit, returned, args.exit)
 
 
@@ -171,7 +178,9 @@ def main(argv: list[str] | None = None) -> int:
     p = run_parser("record", "check a handed-out unit's result and write its ledger entry")
     p.add_argument("unit", help="the unit, as next named it")
     p.add_argument("--return", dest="return_file", help="a file with the agent's or tool's JSON return")
-    p.add_argument("--exit", type=int, help="a command step's exit code")
+    p.add_argument("--exit", type=int, help="a command's exit code")
+    p.add_argument("--gate", action="store_true", help="record the unit's auto gate: its verdict, or --exit")
+    p.add_argument("--output", help="a command gate's output, kept as the finding when it fails")
     p.set_defaults(handler=cmd_record)
 
     for name, step in NOT_YET.items():
