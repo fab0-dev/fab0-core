@@ -1,0 +1,3 @@
+artifact: notes
+kind: file
+file: {repo: home, path: "docs/notes/{run}.md", format: markdown}

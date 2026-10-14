@@ -8,6 +8,7 @@ fab0 is being refactored; [REFACTOR.md](https://github.com/fab0-dev/fab0/blob/ma
 - don't release: no version bump, no tag, so auto-update can't hand projects a half-built core;
 - don't use `/fab0:run` here; work by hand, one refactor step per PR;
 - the layout and conventions below describe 0.5.0, and steps R1 to R4 change them.
+- schema 2 lives in `plugins/fab0/schemas/v2/`, with its fixture factories in `tests/fixtures/v2/` and its tests in `tests/test_schema_v2.py`. The 0.5 resolver still reads `plugins/fab0/schemas/`; step R2a moves schema 2 there and drops schema 1.
 
 ## Layout
 

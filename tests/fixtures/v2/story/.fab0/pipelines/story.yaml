@@ -1,0 +1,32 @@
+pipeline: story
+trigger: {issue: {type: Story}}
+onStart:
+  - git.run-branch
+  - pr.open-run: {draft: true}
+  - tracker.field: {state: Started}
+steps:
+  - step: spec
+    gate: {human: {owner: product-owner}}
+  - foreach: tasks
+    id: tasks
+    max: 2
+    onStart:
+      - tracker.child.sync: {type: Task, title: "{unit.title}"}
+    steps:
+      - step: implement
+        gate: {auto: {agent: reviewer, model: deep}, merge: auto, retry: 2, then: human}
+  - when: {artifact: spec, section: Docs}
+    steps:
+      - step: docs-note
+        agent: writer
+        model: fast
+        inputs: [spec]
+        outputs: [notes]
+        repos: {write: [home]}
+        paths: ["docs/**"]
+        owner: product-owner
+onEnd:
+  - git.sync-base
+  - git.remove-run-artifacts
+  - pr.ready
+  - tracker.close

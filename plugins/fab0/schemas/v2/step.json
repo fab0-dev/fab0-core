@@ -1,0 +1,120 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "fab0 step (.fab0/steps/<name>.yaml, or inline in a pipeline), schema 2",
+  "description": "One unit of work with exactly one executor: an agent, a catalogue action, a shell command, or a tool call made by the session. Gates belong to the pipeline, because they are transitions between steps.",
+  "type": "object",
+  "required": ["step"],
+  "additionalProperties": false,
+  "oneOf": [
+    {
+      "required": ["agent"],
+      "not": {"anyOf": [{"required": ["action"]}, {"required": ["command"]}, {"required": ["tool"]}]}
+    },
+    {
+      "required": ["action"],
+      "not": {"anyOf": [{"required": ["agent"]}, {"required": ["command"]}, {"required": ["tool"]}]}
+    },
+    {
+      "required": ["command"],
+      "not": {"anyOf": [{"required": ["agent"]}, {"required": ["action"]}, {"required": ["tool"]}]}
+    },
+    {
+      "required": ["tool"],
+      "not": {"anyOf": [{"required": ["agent"]}, {"required": ["action"]}, {"required": ["command"]}]}
+    }
+  ],
+  "properties": {
+    "step": {"$ref": "#/$defs/name"},
+    "agent": {
+      "description": "Any Claude Code agent: `plugin:agent`, or a file in `.claude/agents/`. fab0 adds no conventions to it; the brief says what to read, write and return.",
+      "type": "string",
+      "pattern": "^([a-z0-9][a-z0-9_-]*:)?[a-z0-9][a-z0-9_-]*$"
+    },
+    "action": {
+      "description": "A catalogue action, run by the engine.",
+      "type": "string",
+      "pattern": "^(git|pr|tracker)(\\.[a-z][a-z0-9-]*)+$"
+    },
+    "command": {
+      "description": "A deterministic shell command, run in the unit's worktree.",
+      "type": "string",
+      "minLength": 1
+    },
+    "tool": {
+      "description": "An MCP or other tool, called by the session. Its result is recorded like an agent's return.",
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_.:-]+$"
+    },
+    "with": {
+      "description": "Arguments for an action or a tool. Strings may use `{run}`, `{run.<field>}` (the run's tracker item), `{unit}`, `{unit.<field>}`, and `{<step>.<field>}` (a field of an earlier step's return `data`).",
+      "type": "object"
+    },
+    "model": {"description": "A model class from `models` (agent steps).", "$ref": "#/$defs/name"},
+    "skills": {
+      "description": "Skills the agent loads first: `plugin:skill`, or a skill in `.claude/skills/`.",
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"type": "string", "pattern": "^([a-z0-9][a-z0-9_-]*:)?[a-z0-9][a-z0-9_-]*$"}
+    },
+    "instructions": {
+      "description": "Extra text for the agent's brief, for agents that aren't written for this step.",
+      "type": "string",
+      "minLength": 1
+    },
+    "inputs": {
+      "description": "Artifacts the step reads, or `unit` for the current element.",
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/ref"}
+    },
+    "outputs": {
+      "description": "Artifacts the step writes.",
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/name"}
+    },
+    "repos": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "write": {
+          "description": "Repository names, or `unit.<field>`.",
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/ref"}
+        },
+        "read": {
+          "description": "Repository names, or `all`.",
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/ref"}
+        }
+      }
+    },
+    "paths": {
+      "description": "The step's write claim: globs, or `unit.<field>`. Units whose claims overlap don't run at once.",
+      "oneOf": [
+        {"$ref": "#/$defs/ref"},
+        {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "minLength": 1}}
+      ]
+    },
+    "return": {
+      "description": "Fields the step's return may or must carry, beyond `summary`. `questions` pauses the unit until a person answers.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "questions": {"enum": ["optional", "required"]},
+        "schema": {
+          "description": "A project-relative JSON Schema the return's `data` must match.",
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "owner": {"description": "The role whose turn the step is, or `repo-owner`.", "$ref": "#/$defs/name"}
+  },
+  "$defs": {
+    "name": {"type": "string", "pattern": "^[a-z][a-z0-9-]*$"},
+    "ref": {"type": "string", "pattern": "^[a-z][a-z0-9-]*(\\.[A-Za-z0-9_-]+)*$"}
+  }
+}

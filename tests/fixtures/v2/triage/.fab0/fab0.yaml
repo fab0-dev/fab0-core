@@ -1,0 +1,11 @@
+# Not a delivery factory: bug reports are triaged in the tracker, with no pull requests.
+schema: 2
+repos:
+  home: {path: ., github: acme/support, owner: support}
+people:
+  support: {github: [support-user]}
+tracker: {kind: github, owner: acme}
+ledger: {path: "triage/{run}", branch: fab0/ledger}
+models:
+  claude-code: {deep: opus, balanced: sonnet, fast: haiku}
+pipelines: [triage]

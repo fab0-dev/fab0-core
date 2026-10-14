@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "fab0 verdict: the return of an agent in an auto gate, schema 2",
+  "description": "`approve` passes the gate. `reject` re-runs the producing step with the findings, up to the gate's `retry`. `escalate` hands the gate to a person.",
+  "type": "object",
+  "required": ["decision", "reasons"],
+  "additionalProperties": false,
+  "properties": {
+    "decision": {"enum": ["approve", "reject", "escalate"]},
+    "reasons": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["message"],
+        "additionalProperties": false,
+        "properties": {
+          "check": {"type": "string"},
+          "message": {"type": "string", "minLength": 1},
+          "location": {"description": "`path:line` where there is one.", "type": "string"}
+        }
+      }
+    },
+    "details": {
+      "description": "Anything the factory's own review conventions add, for example unmet acceptance criteria. fab0 records it and doesn't read it.",
+      "type": "object"
+    }
+  }
+}

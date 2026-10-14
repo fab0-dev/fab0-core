@@ -1,0 +1,8 @@
+step: write
+agent: docs-writer
+model: balanced
+skills: [docs-style]
+inputs: [brief, unit, style]
+repos: {write: [home], read: [all]}
+paths: unit.paths
+owner: docs-owner

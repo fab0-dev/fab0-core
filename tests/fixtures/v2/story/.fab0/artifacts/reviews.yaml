@@ -1,0 +1,3 @@
+artifact: reviews
+kind: pr
+pr: {of: unit, part: reviews}

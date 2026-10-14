@@ -1,0 +1,2 @@
+step: links
+command: "lychee --offline docs"
