@@ -6,6 +6,7 @@ import subprocess
 from pathlib import Path
 
 from .errors import EXIT_ERROR, Fail
+from .hashing import sha
 
 
 class Repo:
@@ -73,3 +74,45 @@ class Repo:
             elif line.startswith("branch refs/heads/") and path is not None:
                 out[line.removeprefix("branch refs/heads/")] = path
         return out
+
+    def scope_state(self) -> dict:
+        """The main checkout's HEAD and a hash of every dirty file, to see changes made while a unit ran."""
+        if not self.exists():
+            return {"absent": True}
+        head = self._git("rev-parse", "-q", "--verify", "HEAD").stdout.decode().strip() or None
+        parts = self._git("status", "--porcelain=v1", "-z", "--untracked-files=all").stdout.decode().split("\0")
+        dirty, i = {}, 0
+        while i < len(parts):
+            item = parts[i]
+            i += 1
+            if len(item) < 4:
+                continue
+            code, path = item[:2], item[3:]
+            if "R" in code or "C" in code:
+                i += 1  # the original path follows a rename or copy
+            file = self.path / path
+            dirty[path] = sha(file.read_bytes()) if file.is_file() else "deleted"
+        return {"head": head, "dirty": dirty}
+
+    def changed_since(self, tree: Path, base: str) -> list[str]:
+        """Files a checkout changed since `base`: committed, staged, unstaged and untracked."""
+
+        def lines(*args: str) -> list[str]:
+            run = subprocess.run(["git", "-C", str(tree), *args], capture_output=True, text=True)
+            return [line for line in run.stdout.splitlines() if line]
+
+        return sorted(
+            set(lines("diff", "--name-only", base)) | set(lines("ls-files", "--others", "--exclude-standard"))
+        )
+
+
+def scope_diff(before: dict, after: dict) -> list[str]:
+    if before.get("absent") or after.get("absent"):
+        return [] if before == after else ["the repository appeared or disappeared"]
+    changes = []
+    if before["head"] != after["head"]:
+        changes.append(f"HEAD moved from {before['head']} to {after['head']}")
+    for path in sorted(set(before["dirty"]) | set(after["dirty"])):
+        if before["dirty"].get(path) != after["dirty"].get(path):
+            changes.append(path)
+    return changes

@@ -184,8 +184,8 @@ class Wiring:
                 self.error(where, "schema: only yaml and json files have a schema")
             elif problem := check_schema_file(art["schema"], self.root):
                 self.error(where, f"schema: {problem}")
-        if "elements" in art and not (kind == "tool" or fmt in LISTABLE):
-            self.error(where, "elements: only yaml and json files, and tool results, are lists")
+        if "elements" in art and fmt not in LISTABLE:
+            self.error(where, "elements: only yaml and json files are lists the engine reads")
         for check in art.get("verify", []):
             if "sections" in check and fmt != "markdown":
                 self.error(where, "verify: sections needs a markdown file")
@@ -443,8 +443,8 @@ class Pipeline:
         if art is None:
             self.error(f"{at}: foreach: no artifact '{name}'")
         else:
-            if not (art["kind"] == "tool" or art.get("file", {}).get("format") in LISTABLE):
-                self.error(f"{at}: foreach needs a yaml or json file, or a tool result")
+            if art.get("file", {}).get("format") not in LISTABLE:
+                self.error(f"{at}: foreach needs a yaml or json file")
             if name not in available and self._written_later(name):
                 self.error(f"{at}: foreach reads '{name}' before a step writes it")
         return self._walk(node["steps"], f"{at}.steps", set(available), True, None)
@@ -545,6 +545,8 @@ class Pipeline:
             art = self.w.artifacts.get(name)
             if art is None:
                 self.error(f"{at}: no artifact '{name}'")
+            elif art["kind"] != "file":
+                self.error(f"{at}: conditions read file artifacts only, and '{name}' is {art['kind']}")
             elif "section" in cond and art.get("file", {}).get("format") != "markdown":
                 self.error(f"{at}: section needs a markdown file, and '{name}' isn't one")
         if "verdict" in cond and cond["verdict"] not in self.gated:

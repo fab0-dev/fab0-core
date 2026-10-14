@@ -97,7 +97,7 @@ def load_run(args) -> Run:
     trigger = wiring.pipelines[pipeline]["trigger"]
     if "manual" in trigger and trigger["manual"].get("id") and not re.search(trigger["manual"]["id"], args.run):
         raise Fail(EXIT_USAGE, f"run id '{args.run}' doesn't match {trigger['manual']['id']}")
-    tracker = make_tracker() if "tracker" in wiring.project else None
+    tracker = make_tracker()  # read-only: issue and pull request facts, from gh or FAB0_GH_FAKE
     run = Run(wiring, pipeline, args.run, actor(args, tracker) if args.command != "status" else "", tracker)
     if not run.home.exists():
         raise Fail(EXIT_ERROR, f"the home repo {run.home.path} is not a git repository")
@@ -134,6 +134,7 @@ def cmd_record(args) -> dict:
             returned = json.loads(Path(args.return_file).read_text())
         except (OSError, ValueError) as exc:
             raise Fail(EXIT_USAGE, f"--return {args.return_file}: {exc}") from None
+    run.evaluate()
     return record(run, args.unit, returned, args.exit)
 
 
