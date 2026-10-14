@@ -5,7 +5,8 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from conftest import STORY_GH, git
+import yaml
+from conftest import STORY_GH, git, start_docs, start_story
 
 SPEC = "# Extend a booking\n\n## Intent\n\nOne more night.\n\n## Scope\n\nBookings.\n\n## Scenarios\n\n- S1\n"
 TASKS = """- {id: T1, title: Booking API, repo: backend, files: [src/a.py]}
@@ -16,7 +17,12 @@ TASKS = """- {id: T1, title: Booking API, repo: backend, files: [src/a.py]}
 
 
 def states(result: dict) -> dict:
-    return {u["unit"]: (u["state"], u.get("reason")) for u in result["units"]}
+    """The steps' units and their states; the pipeline's and blocks' own actions are in `actions`."""
+    return {u["unit"]: (u["state"], u.get("reason")) for u in result["units"] if "lifecycle" not in u}
+
+
+def actions(result: dict) -> dict:
+    return {u["unit"]: (u["action"], u["state"], u.get("reason")) for u in result["units"] if "lifecycle" in u}
 
 
 def handouts(result: dict) -> dict:
@@ -64,8 +70,7 @@ def finish(f, run: str, handout: dict, trees: dict, files: dict | None = None, r
 
 
 def started(f):
-    f.branch("home", "fab0/412/base", "main")
-    f.branch("backend", "fab0/412/base", "main")
+    start_story(f)
 
 
 def do_spec(f, tasks=TASKS, spec=SPEC):
@@ -75,12 +80,48 @@ def do_spec(f, tasks=TASKS, spec=SPEC):
     files = {("home", "specs/412.md"): spec, ("home", "work/412/tasks.yaml"): tasks}
     finish(f, "412", h, trees, files, {"summary": "Wrote the spec."})
     f.merge("home", "fab0/412/spec", "fab0/412/base")
+    sync_children(f, tasks)
 
 
-def test_a_run_starts_with_its_run_branch(story):
+def sync_children(f, tasks: str) -> None:
+    """What `apply` does for the foreach's onStart: a Task sub-issue per task, titled like it."""
+
+    def change(data):
+        children = []
+        for i, task in enumerate(yaml.safe_load(tasks) or []):
+            if isinstance(task, dict) and "title" in task:
+                ref = f"acme/shop#{500 + i}"
+                data["issues"][ref] = {"title": task["title"], "type": "Task"}
+                children.append(ref)
+        data["issues"]["acme/shop#412"]["sub_issues"] = children
+
+    f.gh_edit(change)
+
+
+def test_a_run_starts_with_its_onstart_actions(story):
+    res = story.run("next", "412")
+    assert res["kind"] == "units" and res["branch"] == "fab0/412/base"
+    assert actions(res)["onStart-1"] == ("git.run-branch", "ready", {"missing": "no fab0/412/base in home, backend"})
+    assert actions(res)["onStart-2"] == ("pr.open-run", "blocked", {"order": "onStart-1"})
+    assert states(res)["spec"] == ("blocked", {"order": "onStart"})
+    h = handouts(res)["onStart-1"]
+    assert h["executor"] == "action" and h["lifecycle"] == "onStart" and h["with"] == {}
+    story.branch("home", "fab0/412/base", "main")
+    story.branch("backend", "fab0/412/base", "main")
+    res = story.run("next", "412")
+    assert actions(res)["onStart-2"] == ("pr.open-run", "ready", {"missing": "home: no pull request"})
+    start_story(story)  # the pull request and the field too; the branches are already there
     res = story.run("status", "412")
-    assert res["kind"] == "start" and res["branch"] == "fab0/412/base"
-    assert res["actions"][0] == "git.run-branch" and res["units"] == []
+    assert actions(res) == {
+        "onStart-1": ("git.run-branch", "done", None),
+        "onStart-2": ("pr.open-run", "done", None),
+        "onStart-3": ("tracker.field", "done", None),
+        "onEnd-1": ("git.sync-base", "blocked", {"order": "steps"}),
+        "onEnd-2": ("git.remove-run-artifacts", "blocked", {"order": "steps"}),
+        "onEnd-3": ("pr.ready", "blocked", {"order": "steps"}),
+        "onEnd-4": ("tracker.close", "blocked", {"order": "steps"}),
+    }
+    assert states(res)["spec"] == ("ready", None)
 
 
 def test_the_first_step_is_ready_and_the_rest_wait_on_it(story):
@@ -170,7 +211,7 @@ def test_foreach_units_follow_after_and_claims(story):
 
 def test_a_list_without_usable_ids_blocks_the_foreach(factory):
     f = factory("docs").init_git(DOCS_GH)
-    f.branch("home", "docs/docs-1", "main")
+    start_docs(f)
     brief = handouts(f.run("next", "docs-1"))["brief"]
     pages = json.dumps([{"slug": "intro", "file": "docs/intro.md"}, {"file": "docs/other.md"}])
     files = {("home", "briefs/docs-1.md"): BRIEF, ("home", "work/docs-1/pages.json"): pages}
@@ -210,16 +251,45 @@ def test_when_runs_its_steps_only_if_the_condition_holds(story):
     assert story.run("status", "412")["kind"] == "units", "gate none: merged by apply, not yet"
     story.merge("home", "fab0/412/docs-note", "fab0/412/base")
     end = story.run("status", "412")
-    assert end["kind"] == "end" and end["actions"][-1] == "tracker.close"
+    assert states(end)["docs-note"] == ("done", None)
+    assert actions(end)["onEnd-2"] == (
+        "git.remove-run-artifacts",
+        "ready",
+        {"missing": "still there: home:work/412/tasks.yaml"},
+    )
 
 
-def test_without_the_section_the_run_ends_after_the_tasks(story):
+def test_the_run_ends_with_its_onend_actions_and_a_merge(story):
     do_spec(story, tasks="- {id: T1, title: A, repo: backend, files: [a]}\n")
     t1 = handouts(story.run("next", "412"))["implement-T1"]
     finish(story, "412", t1, start_work(story, t1), {("backend", "a"): "1"}, {"summary": "Done."})
     story.merge("backend", "fab0/412/implement-T1", "fab0/412/base")
+    res = story.run("next", "412")
+    assert "docs-note" not in states(res) and res["kind"] == "units"
+    assert actions(res)["onEnd-1"] == ("git.sync-base", "done", None)
+    assert actions(res)["onEnd-2"][1:] == ("ready", {"missing": "still there: home:work/412/tasks.yaml"})
+    assert [h["unit"] for h in res["handouts"]] == ["onEnd-2"]
+    home = story.repo("home")  # what apply does: remove the run's artifacts on the run branch
+    git(home, "checkout", "-q", "fab0/412/base")
+    git(home, "rm", "-q", "work/412/tasks.yaml")
+    git(home, "commit", "-q", "-m", "remove the run's artifacts")
+    git(home, "checkout", "-q", "main")
     res = story.run("status", "412")
-    assert res["kind"] == "end" and "docs-note" not in states(res)
+    assert states(res)["spec"] == ("done", None) and states(res)["implement-T1"] == ("done", None), "D38"
+    assert actions(res)["onEnd-3"] == ("pr.ready", "ready", {"missing": "home: a draft; backend: no pull request"})
+
+    def ready(data):
+        data["pulls"]["acme/shop"][0]["draft"] = False
+        data["pulls"]["acme/shop-api"] = [{"number": 2, "branch": "fab0/412/base", "base": "main"}]
+        data["issues"]["acme/shop#412"]["state"] = "closed"
+
+    story.gh_edit(ready)
+    res = story.run("status", "412")
+    assert res["kind"] == "waiting" and res["reason"] == {"gate": "human", "merge": "fab0/412/base into the base"}
+    story.merge("home", "fab0/412/base", "main")
+    assert story.run("status", "412")["kind"] == "waiting", "backend's run pull request isn't merged yet"
+    story.merge("backend", "fab0/412/base", "main")
+    assert story.run("status", "412")["kind"] == "done"
 
 
 def test_parallel_project_limit(story):
@@ -247,7 +317,7 @@ def test_a_manual_run_id_must_match_its_pattern(docs):
 
 
 def test_a_gated_block_has_its_own_branch(docs):
-    docs.branch("home", "docs/docs-1", "main")
+    start_docs(docs)
     brief = handouts(docs.run("next", "docs-1"))["brief"]
     assert brief["branch"] == "docs/docs-1--brief"
     files = {
@@ -284,7 +354,7 @@ def test_a_gated_block_has_its_own_branch(docs):
 
 
 def test_a_command_is_recorded_with_its_exit_code(docs):
-    docs.branch("home", "docs/docs-1", "main")
+    start_docs(docs)
     brief = handouts(docs.run("next", "docs-1"))["brief"]
     res = finish(docs, "docs-1", brief, start_work(docs, brief), exit=0, expect=2)
     assert "recorded with --return" in res["error"]
@@ -294,7 +364,7 @@ def test_a_command_is_recorded_with_its_exit_code(docs):
 
 TRIAGE_GH = {
     "user": "support-user",
-    "issues": {"acme/support#7": {"title": "Checkout fails", "body": "500 on pay.", "labels": ["needs-triage"]}},
+    "issues": {"acme/support#7": {"title": "Checkout fails", "body": "500 on pay.", "labels": ["triaging"]}},
 }
 
 

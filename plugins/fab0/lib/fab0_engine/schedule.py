@@ -12,7 +12,10 @@ gives every unit a state:
   is missing), `claim` (an earlier unit claims overlapping paths), `limit` (too many units at once),
   `invalid-dependency`, `condition` (a `when` can't be decided yet), `failed` (a command exited non-zero),
   or `start` (the run hasn't started).
-- `done`: its ledger entry is on the branch it merges into.
+- `done`: its ledger entry is on the branch it merges into; for an action, its check passes.
+
+Actions (the pipeline's and its blocks' `onStart` and `onEnd`, and action steps) are units too. An action is
+done when its check passes: its result is a fact in git or the tracker, so it writes no ledger entry (D37).
 
 Branches (D10, D14): in `run` branching every unit works on its own branch and merges into its parent: the
 run branch, or the branch of the gated block around it. In `flat` branching the parent is the base branch.
@@ -28,6 +31,7 @@ from pathlib import Path
 
 import yaml
 
+from .actions import check
 from .artifacts import input_hashes
 from .claims import EVERYTHING, overlap
 from .git import Repo
@@ -68,6 +72,8 @@ class Unit:
     history: list = field(default_factory=list)  # every recorded attempt, oldest first
     gates: dict = field(default_factory=dict)  # attempt -> the auto gate's ledger entry
     gate_inputs: str | None = None  # a gated block: the hash of its units' attempts its gate must judge
+    lifecycle: str | None = None  # `onStart` or `onEnd`, for an action of the pipeline or a block
+    elements: list | None = None  # a foreach's elements, for its own actions
 
     @property
     def auto(self) -> dict | None:
@@ -83,6 +89,10 @@ class Unit:
             out["step"] = self.step["step"]
         if self.element_id:
             out["element"] = self.element_id
+        if self.step and "action" in self.step:
+            out["action"] = self.step["action"]
+        if self.lifecycle:
+            out["lifecycle"] = self.lifecycle
         if self.reason:
             out["reason"] = self.reason
         if self.branch:
@@ -152,30 +162,83 @@ class Run:
                 self._item = self.tracker.issue(self.home.github, int(self.run))
         return self._item
 
-    def started(self) -> bool:
-        return self.run_branch is None or self.home.fresh(self.run_branch) is not None
-
     def pending_dir(self) -> Path:
         return Path(self.home.out("rev-parse", "--absolute-git-dir")) / "fab0" / "pending" / self.run
 
     # ------------------------------------------------------------ the walk
 
     def evaluate(self) -> dict:
+        """Every unit and its state; and the run's: `units` while work is left, `waiting` for the merge of the
+        run's pull request, `done`."""
         out = {"ok": True, "run": self.run, "pipeline": self.name}
-        if not self.started():
-            return {**out, "kind": "start", "actions": self.p["onStart"], "branch": self.run_branch, "units": []}
-        done = self.walk(self.p["steps"], Ctx(parent=self.run_branch), True, None)
+        ctx = Ctx(parent=self.run_branch)
+        started = self.walk_actions(self.p["onStart"], "onStart", "", ctx, True, None)
+        steps = self.walk(self.p["steps"], ctx, started, None if started else {"order": "onStart"})
+        ended = self.walk_actions(self.p["onEnd"], "onEnd", "", ctx, steps, None if steps else {"order": "steps"})
         self.apply_claims()
         self.apply_limits()
         out["units"] = [u.summary() for u in self.units]
-        if done:
-            out["kind"] = "end"
-            out["actions"] = self.p["onEnd"]
-            if self.run_branch:
-                out["branch"] = self.run_branch
-        else:
+        if self.run_branch:
+            out["branch"] = self.run_branch
+        if not ended:
             out["kind"] = "units"
+        elif self.run_branch and not self.merged():
+            out["kind"], out["reason"] = "waiting", {"gate": "human", "merge": f"{self.run_branch} into the base"}
+        else:
+            out["kind"] = "done"
         return out
+
+    def merged(self) -> bool:
+        """The run branch is in the base of every repository that has it."""
+        for repo in self.repos.values():
+            head, base = repo.fresh(self.run_branch), repo.fresh(repo.base)
+            if head and (not base or not repo.is_ancestor(head, base)):
+                return False
+        return True
+
+    def walk_actions(
+        self,
+        actions: list,
+        phase: str,
+        prefix: str,
+        ctx: Ctx,
+        reachable: bool,
+        reason: dict | None,
+        elements: list | None = None,
+    ) -> bool:
+        """A list of actions, in order; True when every one's check passes."""
+        all_done = True
+        for i, action in enumerate(actions):
+            name = action if isinstance(action, str) else next(iter(action))
+            args = {} if isinstance(action, str) else action[name]
+            uid = f"{prefix}{phase}-{i + 1}"
+            unit = Unit(
+                id=uid,
+                step={"step": uid, "action": name, "with": args},
+                label=name,
+                ctx=ctx,
+                lifecycle=phase,
+                elements=elements,
+            )
+            self.units.append(unit)
+            if not (reachable and all_done):
+                unit.reason = reason if not reachable else {"order": f"{phase}-{i}"}
+                all_done = False
+                continue
+            all_done = self.action_state(unit) and all_done
+        return all_done
+
+    def action_state(self, unit: Unit) -> bool:
+        try:
+            missing = check(self, unit.step["action"], unit.step.get("with", {}), unit.ctx, unit.elements)
+        except Unresolved as exc:
+            unit.state, unit.reason = "blocked", {"data": f"{{{exc}}} has no value"}
+            return False
+        if missing is None:
+            unit.state, unit.reason = "done", None
+            return True
+        unit.state, unit.reason = "ready", {"missing": missing}
+        return False
 
     def walk(self, nodes: list, ctx: Ctx, reachable: bool, reason: dict | None) -> bool:
         """Gives a state to every unit under `nodes`, in order; True when all of them are done."""
@@ -246,9 +309,9 @@ class Run:
 
     def walk_block(self, node, ctx: Ctx, reachable: bool, reason: dict | None, pos: str) -> bool:
         if "foreach" in node:
-            return self.walk_foreach(node, ctx, reachable, reason)
+            return self.walk_foreach(node, ctx, reachable, reason, pos)
         if "parallel" in node:
-            return self.walk_parallel(node, ctx, reachable, reason)
+            return self.walk_parallel(node, ctx, reachable, reason, pos)
         if "when" in node:
             return self.walk_when(node, ctx, reachable, reason)
         self.placeholder(node, ctx, {"unsupported": "call"})
@@ -265,9 +328,14 @@ class Run:
             )
         )
 
+    def block_prefix(self, node: dict, ctx: Ctx, kind: str, pos: str) -> str:
+        """What a block's own actions are named under: inside a gated block, its prefix is already there."""
+        block_id = node.get("id") or f"{kind}-{pos}"
+        return ctx.prefix if ctx.prefix.endswith(block_id + "--") else f"{ctx.prefix}{block_id}--"
+
     # ------------------------------------------------------------ foreach
 
-    def walk_foreach(self, node: dict, ctx: Ctx, reachable: bool, reason: dict | None) -> bool:
+    def walk_foreach(self, node: dict, ctx: Ctx, reachable: bool, reason: dict | None, pos: str) -> bool:
         if not reachable:
             self.placeholder(node, ctx, reason)
             return False
@@ -275,6 +343,8 @@ class Run:
         if problem:
             self.placeholder(node, ctx, problem)
             return False
+        prefix = self.block_prefix(node, ctx, "foreach", pos)
+        started = self.walk_actions(node.get("onStart", []), "onStart", prefix, ctx, True, None, elements)
         ids = [e["id"] for e in elements]
         done: dict[str, bool] = {}
         invalid = self.invalid_after(elements)
@@ -286,12 +356,15 @@ class Run:
                 done[element["id"]] = False
                 continue
             waiting = [d for d in element["after"] if not done.get(d)]
-            here_reason = {"order": waiting} if waiting else None
-            done[element["id"]] = self.walk(node["steps"], inner, not waiting, here_reason)
+            here_reason = {"order": waiting} if waiting else None if started else {"order": "onStart"}
+            done[element["id"]] = self.walk(node["steps"], inner, started and not waiting, here_reason)
         # walked dependencies first, so `done` is known; listed in the list's order, which decides claims
         position = {i: n for n, i in enumerate(ids)}
         self.units[start:] = sorted(self.units[start:], key=lambda u: position[u.element_id])
-        return all(done.get(i) for i in ids)
+        units_done = all(done.get(i) for i in ids)
+        why = None if units_done else {"order": "the block's units"}
+        ended = self.walk_actions(node.get("onEnd", []), "onEnd", prefix, ctx, units_done, why, elements)
+        return units_done and ended
 
     def elements(self, ref: str, ctx: Ctx) -> tuple[list, dict | None]:
         name, *at = ref.split(".")
@@ -367,7 +440,11 @@ class Run:
 
     # ------------------------------------------------------------ parallel and when
 
-    def walk_parallel(self, node: dict, ctx: Ctx, reachable: bool, reason: dict | None) -> bool:
+    def walk_parallel(self, node: dict, ctx: Ctx, reachable: bool, reason: dict | None, pos: str) -> bool:
+        prefix = self.block_prefix(node, ctx, "parallel", pos)
+        started = self.walk_actions(node.get("onStart", []), "onStart", prefix, ctx, reachable, reason)
+        if reachable and not started:
+            reachable, reason = False, {"order": "onStart"}
         branches = node["parallel"]
         owner = {}
         for name, nodes in branches.items():
@@ -389,7 +466,10 @@ class Run:
                 here_reason = reason if not reachable else ({"order": waiting} if waiting else None)
                 done[b] = self.walk(branches[b], ctx, reachable and not waiting, here_reason)
                 remaining.remove(b)
-        return all(done.values())
+        units_done = all(done.values())
+        why = reason if not reachable else None if units_done else {"order": "the block's units"}
+        ended = self.walk_actions(node.get("onEnd", []), "onEnd", prefix, ctx, reachable and units_done, why)
+        return units_done and ended
 
     def walk_when(self, node: dict, ctx: Ctx, reachable: bool, reason: dict | None) -> bool:
         if not reachable:
@@ -474,6 +554,9 @@ class Run:
         repo, path = self.artifact_location(name, ctx)
         ref = repo.fresh(self.parent_in(repo, ctx.parent)) or repo.fresh(repo.base)
         raw = repo.read_file(ref, path) if ref else None
+        if raw is None and ref and self.w.artifacts[name].get("keep") == "run":
+            before = repo.removed_at(ref, path)  # a run artifact the run's end removed: read it as it was (D38)
+            raw = repo.read_file(before, path) if before else None
         if raw is None:
             return None, {"data": f"{name} is missing: {repo.name}:{path}"}
         fmt = self.w.artifacts[name]["file"].get("format")
@@ -523,6 +606,11 @@ class Run:
         gate = "none" if isinstance(node, str) else node.get("gate", "none")
         unit = Unit(id=uid, step=step, label=uid, ctx=ctx, gate=gate)
         self.units.append(unit)
+        if "action" in step:  # applied, not recorded: its check is its state
+            if not reachable:
+                unit.reason = reason
+                return False
+            return self.action_state(unit)
         try:
             unit.write = [
                 self.element_field(ctx, r.removeprefix("unit.")) if r.startswith("unit.") else r
@@ -727,7 +815,10 @@ class Run:
         for branch in (unit.branch, self.parent_in(repo, unit.ctx.parent)):
             ref = repo.fresh(branch) if branch else None
             if ref:
-                return repo.read_file(ref, path) is not None or bool(repo.names(ref, path))
+                if repo.read_file(ref, path) is not None or repo.names(ref, path):
+                    return True
+                # a run artifact the run's end removed still counts as written (D38)
+                return self.w.artifacts[name].get("keep") == "run" and repo.removed_at(ref, path) is not None
         return False
 
     def missing_inputs(self, unit: Unit) -> dict | None:
@@ -767,7 +858,7 @@ class Run:
                 key = (u.ctx.prefix, u.step["step"])
                 per_step[key] = per_step.get(key, 0) + 1
         for u in self.units:
-            if u.state != "ready":
+            if u.state != "ready" or "action" in u.step:
                 continue
             if total is not None and count >= total:
                 u.state, u.reason = "blocked", {"limit": f"parallel.max {total}"}

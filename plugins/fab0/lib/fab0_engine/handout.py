@@ -154,6 +154,34 @@ def brief(run: Run, unit: Unit, schema: dict, trees: dict[str, str]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def action_handout(run: Run, unit: Unit) -> dict:
+    """An action whose check fails: `apply` performs it, and its check is its record (D37)."""
+    out = {
+        "unit": unit.id,
+        "executor": "action",
+        "action": unit.step["action"],
+        "missing": (unit.reason or {}).get("missing"),
+        "fab0_version": read_version(),
+    }
+    if unit.lifecycle:
+        out["lifecycle"] = unit.lifecycle
+    try:
+        if unit.step["action"] == "tracker.child.sync":
+            from .actions import child_titles
+
+            args = unit.step.get("with", {})
+            out["with"] = {k: v for k, v in args.items() if k != "title"}
+            out["with"]["items"] = [
+                {"id": e["id"], "title": title, "after": e["after"]}
+                for e, title in child_titles(run, args, unit.ctx, unit.elements or [])
+            ]
+        else:
+            out["with"] = render(unit.step.get("with", {}), run.lookup(unit.ctx))
+    except Unresolved as exc:
+        raise Fail(EXIT_REFUSED, f"{unit.id}: {{{exc}}} has no value yet") from None
+    return out
+
+
 def handout(run: Run, unit: Unit) -> dict:
     step = unit.step
     executor = next(k for k in ("agent", "action", "command", "tool") if k in step)
@@ -248,6 +276,9 @@ def check_writes(run: Run, unit: Unit, pending: dict, trees: dict) -> dict[str, 
 
 
 def record(run: Run, unit_id: str, returned: dict | None, exit_code: int | None) -> dict:
+    found = next((u for u in run.units if u.id == unit_id), None)
+    if found is not None and found.step and "action" in found.step:
+        raise Fail(EXIT_REFUSED, f"{unit_id} is an action: `apply` performs it, and its check is its record")
     path = run.pending_dir() / f"{unit_id}.json"
     if not path.is_file():
         raise Fail(EXIT_REFUSED, f"{unit_id} wasn't handed out to this checkout; run next first")
