@@ -42,7 +42,9 @@
     },
     "summary": {"type": "string"},
     "questions": {"type": "array", "items": {"type": "string"}},
-    "verdict": {"type": "object"}
+    "verdict": {"type": "object"},
+    "data": {"description": "The return's structured `data`, which later steps read as `{<step>.<field>}`."},
+    "exit": {"description": "A command step's exit code.", "type": "integer"}
   },
   "$defs": {"hashes": {"type": "object", "additionalProperties": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}}}
 }
