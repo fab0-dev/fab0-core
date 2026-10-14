@@ -1,48 +1,319 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "fab0 pipeline (.fab0/pipelines/<name>.yaml)",
+  "title": "fab0 pipeline (.fab0/pipelines/<name>.yaml), schema 2",
+  "description": "A tree of steps and operators, with a gate on every transition and actions when the run starts and ends.",
   "type": "object",
-  "required": ["pipeline", "item", "stages"],
+  "required": ["pipeline", "trigger", "onStart", "steps", "onEnd"],
   "additionalProperties": false,
   "properties": {
     "pipeline": {"$ref": "#/$defs/name"},
-    "item": {"$ref": "#/$defs/item"},
-    "inputs": {"type": "object"},
-    "outputs": {"type": "object"},
-    "stages": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/step"}}
+    "trigger": {"$ref": "#/$defs/trigger"},
+    "git": {
+      "description": "Overrides the project's `git.branching` and `git.auto_merge` for this pipeline.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {"branching": {"enum": ["run", "flat"]}, "auto_merge": {"type": "object"}}
+    },
+    "inputs": {"description": "Reserved for `call`: what a calling pipeline passes in.", "type": "object"},
+    "outputs": {"description": "Reserved for `call`: what this pipeline hands back.", "type": "object"},
+    "onStart": {"$ref": "#/$defs/actions"},
+    "steps": {"$ref": "#/$defs/nodes"},
+    "onEnd": {"$ref": "#/$defs/actions"}
   },
   "$defs": {
     "name": {"type": "string", "pattern": "^[a-z][a-z0-9-]*$"},
-    "item": {
-      "type": "object",
-      "required": ["issue_type"],
-      "additionalProperties": false,
-      "properties": {"issue_type": {"type": "string", "minLength": 1}}
+    "ref": {
+      "description": "An artifact, or a field of the current unit: `spec`, `unit`, `unit.repo`.",
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]*(\\.[A-Za-z0-9_-]+)*$"
     },
-    "step": {
+    "trigger": {
+      "description": "How a run starts and gets its id.",
       "oneOf": [
-        {"$ref": "#/$defs/name"},
         {
           "type": "object",
-          "required": ["stage"],
+          "required": ["issue"],
           "additionalProperties": false,
-          "properties": {"stage": {"$ref": "#/$defs/name"}, "when": {}}
+          "properties": {
+            "issue": {
+              "description": "A tracker item of this type, or with this label, starts a run. The run id is the item's number.",
+              "type": "object",
+              "minProperties": 1,
+              "additionalProperties": false,
+              "properties": {"type": {"type": "string", "minLength": 1}, "label": {"type": "string", "minLength": 1}}
+            }
+          }
         },
         {
           "type": "object",
-          "required": ["foreach"],
+          "required": ["manual"],
           "additionalProperties": false,
           "properties": {
-            "foreach": {"type": "string", "pattern": "^[a-z][a-z0-9-]*(\\.[A-Za-z0-9_-]+)*$"},
-            "item": {"$ref": "#/$defs/item"},
-            "stages": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/name"}},
-            "gate": {"enum": ["none", "human"]},
-            "call": {},
-            "inputs": {},
-            "when": {}
+            "manual": {
+              "description": "A person starts a run and names its id.",
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {"id": {"description": "A pattern the id must match.", "type": "string", "minLength": 1}}
+            }
           }
         }
       ]
+    },
+    "actions": {
+      "description": "Actions from fab0's catalogue, run in order. Each is idempotent: a check, then an apply.",
+      "type": "array",
+      "items": {"$ref": "#/$defs/action"}
+    },
+    "action": {
+      "oneOf": [
+        {"$ref": "#/$defs/actionName"},
+        {
+          "type": "object",
+          "minProperties": 1,
+          "maxProperties": 1,
+          "propertyNames": {"$ref": "#/$defs/actionName"},
+          "additionalProperties": {"type": "object"}
+        }
+      ]
+    },
+    "actionName": {
+      "description": "A catalogue name: `git.*`, `pr.*` or `tracker.*`. The engine checks that it exists.",
+      "type": "string",
+      "pattern": "^(git|pr|tracker)(\\.[a-z][a-z0-9-]*)+$"
+    },
+    "nodes": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/node"}},
+    "node": {
+      "oneOf": [
+        {"$ref": "#/$defs/name"},
+        {"$ref": "#/$defs/stepNode"},
+        {"$ref": "#/$defs/foreachNode"},
+        {"$ref": "#/$defs/parallelNode"},
+        {"$ref": "#/$defs/whenNode"},
+        {"$ref": "#/$defs/callNode"}
+      ]
+    },
+    "stepNode": {
+      "description": "A step. With only `step`, it is `.fab0/steps/<step>.yaml`; with an executor, it is defined here.",
+      "type": "object",
+      "required": ["step"],
+      "properties": {
+        "step": {"$ref": "#/$defs/name"},
+        "gate": {"$ref": "#/$defs/gate"},
+        "after": {"$ref": "#/$defs/after"}
+      }
+    },
+    "foreachNode": {
+      "description": "Runs its steps once per element of a list artifact. Elements are units; independent units run in parallel.",
+      "type": "object",
+      "required": ["foreach", "steps"],
+      "additionalProperties": false,
+      "properties": {
+        "foreach": {"$ref": "#/$defs/ref"},
+        "id": {"$ref": "#/$defs/name"},
+        "max": {"description": "Units of this block that may run at once.", "type": "integer", "minimum": 1},
+        "onStart": {"$ref": "#/$defs/actions"},
+        "steps": {"$ref": "#/$defs/nodes"},
+        "onEnd": {"$ref": "#/$defs/actions"},
+        "gate": {"$ref": "#/$defs/gate"},
+        "after": {"$ref": "#/$defs/after"}
+      }
+    },
+    "parallelNode": {
+      "description": "Named branches that run at once. The block is done when every branch is done.",
+      "type": "object",
+      "required": ["parallel"],
+      "additionalProperties": false,
+      "properties": {
+        "parallel": {
+          "type": "object",
+          "minProperties": 2,
+          "propertyNames": {"$ref": "#/$defs/name"},
+          "additionalProperties": {"$ref": "#/$defs/nodes"}
+        },
+        "id": {"$ref": "#/$defs/name"},
+        "onStart": {"$ref": "#/$defs/actions"},
+        "onEnd": {"$ref": "#/$defs/actions"},
+        "gate": {"$ref": "#/$defs/gate"},
+        "after": {"$ref": "#/$defs/after"}
+      }
+    },
+    "whenNode": {
+      "description": "Runs `steps` if the condition holds, and `else` if it doesn't.",
+      "type": "object",
+      "required": ["when", "steps"],
+      "additionalProperties": false,
+      "properties": {
+        "when": {"$ref": "#/$defs/condition"},
+        "id": {"$ref": "#/$defs/name"},
+        "steps": {"$ref": "#/$defs/nodes"},
+        "else": {"$ref": "#/$defs/nodes"},
+        "gate": {"$ref": "#/$defs/gate"},
+        "after": {"$ref": "#/$defs/after"}
+      }
+    },
+    "callNode": {
+      "description": "Reserved: runs another pipeline as a child run. Validated, refused until a factory needs it.",
+      "type": "object",
+      "required": ["call"],
+      "additionalProperties": false,
+      "properties": {
+        "call": {"$ref": "#/$defs/name"},
+        "id": {"$ref": "#/$defs/name"},
+        "inputs": {"type": "object"},
+        "gate": {"$ref": "#/$defs/gate"},
+        "after": {"$ref": "#/$defs/after"}
+      }
+    },
+    "after": {
+      "description": "Steps or blocks, by name or id, in the same parallel block, that must be merged before this one starts.",
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/name"}
+    },
+    "gate": {
+      "description": "The transition after a step or block. `none` (default) moves on. `human`: a person decides. `auto`: an agent's verdict or a command's exit code decides.",
+      "oneOf": [
+        {"enum": ["none", "human"]},
+        {
+          "type": "object",
+          "required": ["human"],
+          "additionalProperties": false,
+          "properties": {
+            "human": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "owner": {"description": "The role whose turn it is; default the repository's owner.", "$ref": "#/$defs/name"},
+                "via": {
+                  "description": "`pr` (default): merging the unit's pull request. `label`: adding `label` to the tracker item, for units without a pull request.",
+                  "enum": ["pr", "label"]
+                },
+                "label": {"type": "string", "minLength": 1}
+              },
+              "if": {"required": ["via"], "properties": {"via": {"const": "label"}}},
+              "then": {"required": ["label"]}
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["auto"],
+          "additionalProperties": false,
+          "properties": {
+            "auto": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "required": ["agent"],
+                  "additionalProperties": false,
+                  "properties": {
+                    "agent": {"$ref": "#/$defs/agent"},
+                    "model": {"$ref": "#/$defs/name"},
+                    "skills": {"$ref": "#/$defs/skills"},
+                    "instructions": {"type": "string", "minLength": 1}
+                  }
+                },
+                {
+                  "type": "object",
+                  "required": ["command"],
+                  "additionalProperties": false,
+                  "properties": {"command": {"type": "string", "minLength": 1}}
+                }
+              ]
+            },
+            "merge": {
+              "description": "Who merges the unit's pull request once the gate approves: `auto` (the engine, within `git.auto_merge`) or `human` (default).",
+              "enum": ["auto", "human"]
+            },
+            "retry": {
+              "description": "Re-runs of the producing step after a reject. Default 2.",
+              "type": "integer",
+              "minimum": 0
+            },
+            "then": {"description": "What happens when the retries run out. Default `human`.", "enum": ["human", "fail"]}
+          }
+        }
+      ]
+    },
+    "condition": {
+      "description": "A closed condition language over artifacts, verdicts and tracker facts.",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["all"],
+          "additionalProperties": false,
+          "properties": {"all": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/condition"}}}
+        },
+        {
+          "type": "object",
+          "required": ["any"],
+          "additionalProperties": false,
+          "properties": {"any": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/condition"}}}
+        },
+        {
+          "type": "object",
+          "required": ["not"],
+          "additionalProperties": false,
+          "properties": {"not": {"$ref": "#/$defs/condition"}}
+        },
+        {
+          "description": "An artifact exists, has a Markdown section, or has a value at a dotted path.",
+          "type": "object",
+          "required": ["artifact"],
+          "additionalProperties": false,
+          "properties": {
+            "artifact": {"$ref": "#/$defs/ref"},
+            "exists": {"type": "boolean"},
+            "section": {"type": "string", "minLength": 1},
+            "path": {"type": "string", "minLength": 1},
+            "equals": {},
+            "in": {"type": "array", "minItems": 1}
+          },
+          "oneOf": [
+            {"required": ["exists"], "not": {"anyOf": [{"required": ["section"]}, {"required": ["path"]}]}},
+            {"required": ["section"], "not": {"anyOf": [{"required": ["exists"]}, {"required": ["path"]}]}},
+            {"required": ["path"], "oneOf": [{"required": ["equals"]}, {"required": ["in"]}]}
+          ]
+        },
+        {
+          "description": "The last verdict of a step's auto gate.",
+          "type": "object",
+          "required": ["verdict", "is"],
+          "additionalProperties": false,
+          "properties": {"verdict": {"$ref": "#/$defs/name"}, "is": {"enum": ["approve", "reject", "escalate"]}}
+        },
+        {
+          "description": "A fact of the run's tracker item.",
+          "type": "object",
+          "required": ["tracker"],
+          "additionalProperties": false,
+          "properties": {
+            "tracker": {
+              "type": "object",
+              "minProperties": 1,
+              "maxProperties": 1,
+              "additionalProperties": false,
+              "properties": {
+                "label": {"type": "string", "minLength": 1},
+                "type": {"type": "string", "minLength": 1},
+                "field": {
+                  "type": "object",
+                  "required": ["name", "equals"],
+                  "additionalProperties": false,
+                  "properties": {"name": {"type": "string", "minLength": 1}, "equals": {}}
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "agent": {"type": "string", "pattern": "^([a-z0-9][a-z0-9_-]*:)?[a-z0-9][a-z0-9_-]*$"},
+    "skills": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"type": "string", "pattern": "^([a-z0-9][a-z0-9_-]*:)?[a-z0-9][a-z0-9_-]*$"}
     }
   }
 }

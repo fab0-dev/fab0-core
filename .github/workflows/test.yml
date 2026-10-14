@@ -13,7 +13,8 @@ jobs:
       - uses: astral-sh/setup-uv@v6
       - run: uv sync --locked
       - run: uv run ruff check
-      - run: uv run ruff format --check plugins/fab0/bin/fab0-resolve tests scripts
+      - run: uv run ruff format --check plugins/fab0/bin/fab0-resolve plugins/fab0/lib tests scripts
       - run: uv run pytest -q
-      - name: The resolver runs through its own uv shebang
-        run: plugins/fab0/bin/fab0-resolve validate --project tests/fixtures/workspace/shop
+      - name: The engine runs through its own uv shebang
+        run: |
+          for f in story docs triage; do plugins/fab0/bin/fab0-resolve validate --project tests/fixtures/$f; done

@@ -1,7 +1,6 @@
-"""fab0-resolve --version, the release named in hand-outs, and the two version declarations."""
+"""fab0-resolve --version, and the two version declarations."""
 
 import json
-import os
 import shutil
 import subprocess
 import sys
@@ -11,7 +10,6 @@ from conftest import ROOT, SCRIPT
 
 PLUGIN = ROOT / "plugins" / "fab0"
 VERSION = json.loads((PLUGIN / ".claude-plugin" / "plugin.json").read_text())["version"]
-LINE = f"Handed out by fab0 {VERSION}."
 
 
 def run_version(script, cwd):
@@ -44,46 +42,6 @@ def test_s2_unreadable_version(tmp_path, manifest):
     code, out = run_version(script, tmp_path)
     assert code == 1 and out["ok"] is False
     assert str(path) in out["error"]
-
-
-def test_s3_stage_brief_names_the_release(ws):
-    res = ws.next()
-    assert res["kind"] == "stage" and res["fab0_version"] == VERSION
-    lines = res["brief"].splitlines()
-    assert lines[lines.index(LINE) - 2].startswith("Run 412:")
-
-
-def test_s3_task_stage_brief_names_the_release(ws):
-    ws.do_spec()
-    ws.do_plan()
-    res = ws.next("--task", "T1", user="backend-dev")
-    assert res["kind"] == "stage" and res["fab0_version"] == VERSION and LINE in res["brief"]
-
-
-def test_s4_gate_brief_names_the_release(ws):
-    ws.do_spec()
-    ws.do_plan()
-    res = ws.next("--task", "T1", user="backend-dev")
-    ws.checkout(ws.api, res["branch"], res["start_from"])
-    ws.write(ws.api, "src/booking.py", "x = 1\n")
-    assert ws.record("implement", {"summary": "Done."}, task="T1")["verified"]
-    ws.commit(ws.api, "implement T1")
-    gate = ws.next("--task", "T1", user="backend-dev")
-    assert gate["kind"] == "gate" and gate["fab0_version"] == VERSION and LINE in gate["brief"]
-
-
-def test_s5_no_hand_out_without_a_release(ws, tmp_path):
-    script, path = broken_plugin(tmp_path, "{}")
-    run = subprocess.run(
-        [sys.executable, str(script), "next", "412", "--as", "po-user"],
-        cwd=ws.home,
-        capture_output=True,
-        text=True,
-        env={**os.environ, "FAB0_GH_FAKE": str(ws.gh_path)},
-    )
-    out = json.loads(run.stdout)
-    assert run.returncode == 1 and out["ok"] is False and str(path) in out["error"]
-    assert not (ws.home / ".git" / "fab0" / "pending").exists()
 
 
 def test_s7_marketplace_and_manifest_agree():
