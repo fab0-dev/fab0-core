@@ -29,6 +29,14 @@ def perform(run: Run, unit: Unit) -> str:
     gh, home = run.tracker, run.home.github
     if name == "tracker.child.sync":
         return sync_children(run, unit, args)
+    if name == "tracker.child.close":
+        items = element_items(run, args, unit.ctx, unit.elements or [], run.children())
+        closed = []
+        for item in items.values():
+            if item["state"] != "closed":
+                gh.close(item["repo"], item["number"])
+                closed.append(f"#{item['number']}")
+        return f"closed {', '.join(closed)}"
     args = render(args, run.lookup(unit.ctx))
     if name == "git.run-branch":
         made = []
@@ -204,6 +212,8 @@ def merge_unit(run: Run, unit: Unit) -> str | None:
             pr = run.tracker.pull(repo.github, unit.branch, parent)
             if pr is not None and run.tracker.checks(repo.github, pr["number"])[0] != "pass":
                 return f"waiting for {repo.github}#{pr['number']}'s required checks"
+            if pr is not None and pr["state"] == "open" and pr["draft"]:
+                run.tracker.ready_pr(repo.github, pr["number"])  # approved: from R6, its record shows it
         Writer(repo).push(unit.branch)
         result = Writer(repo).merge(unit.branch, parent, f"fab0: merge {unit.id} (run {run.run})")
         if "conflict" in result:
@@ -229,7 +239,7 @@ def unit_pull(run: Run, unit: Unit) -> list[str]:
             continue
         Writer(repo).push(unit.branch)
         pr = run.tracker.pull(repo.github, unit.branch, parent)
-        if pr is None or pr["state"] == "closed":
+        if pr is None or pr["state"] in ("closed", "merged"):  # merged at an older attempt: a new one
             title = f"{unit.label}: run {run.run}"
             body = (unit.latest or {}).get("summary", "") + f"\n\nUnit {unit.id} of run {run.run} ({run.name})."
             number = run.tracker.create_pr(repo.github, unit.branch, parent, title, body, draft=not approved)

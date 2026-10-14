@@ -24,6 +24,7 @@ def messages(f) -> str:
         (lambda d: d["steps"][1].update(onEnd=["git.sync-base"]), "acts on the whole run"),
         (lambda d: d["steps"][1].update(onEnd=[{"tracker.child.sync": {}}]), "belongs in a foreach's onStart"),
         (lambda d: d["steps"].append({"step": "ready", "action": "pr.ready"}), "pr.ready can't be a step"),
+        (lambda d: d["steps"][1]["onStart"].append("tracker.child.close"), "belongs in a foreach's onEnd"),
     ],
 )
 def test_actions_belong_where_they_act(factory, change, expected):

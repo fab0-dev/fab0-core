@@ -91,6 +91,7 @@ def test_an_auto_gate_merges_after_approval_and_its_checks(story):
     assert did(res)[0] == {"unit": "implement-T1", "merge": "merged into backend:fab0/412/base"}
     assert states(res)["implement-T1"] == ("done", None)
     assert gh(story)["pulls"]["acme/shop-api"][0]["state"] == "merged"
+    assert gh(story)["pulls"]["acme/shop-api"][0]["draft"] is False, "from R6: marked ready once approved"
     assert git(story.repo("backend"), "show", "fab0/412/base:src/a.py") == "x = 1"
 
 
@@ -162,3 +163,30 @@ def test_apply_on_the_ledger_branch_labels_the_item(factory):
     assert did(res) == [{"unit": "onStart-1", "action": "tracker.label", "did": "labelled"}]
     assert gh(f)["issues"]["acme/support#7"]["labels"] == ["triaging"]
     assert f.run("apply", "7")["applied"] == []
+
+
+def test_a_new_attempt_after_a_merged_pull_request_gets_a_new_one(story):
+    """From R6: a person merged the spec's pull request at attempt 1, then the spec was reworked. The merged pull
+    request can't carry the new attempt, so apply opens another."""
+    spec_done(story)
+    story.run("apply", "412")
+    story.gh_edit(lambda d: d["pulls"]["acme/shop"][1].update(state="merged"))
+    res = story.run("apply", "412")
+    assert did(res) == [{"unit": "spec", "pull": "opened acme/shop#3"}]
+    assert story.run("apply", "412")["applied"] == []
+
+
+def test_a_foreach_closes_its_items_at_its_end(story):
+    """From R6: task pull requests merge into the run branch, which closes no issue, so the foreach does."""
+    close = [{"tracker.child.close": {"type": "Task"}}]
+    story.edit("pipelines/story.yaml", lambda d: d["steps"][1].update(onEnd=close))
+    spec_done(story)
+    story.merge("home", "fab0/412/spec", "fab0/412/base")
+    story.run("apply", "412")
+    implement(story)
+    assert actions(story.run("status", "412"))["tasks--onEnd-1"][1] == "blocked", "not before its units are done"
+    record_gate(story, "412", "implement-T1", verdict("approve"))
+    res = story.run("apply", "412")
+    assert {"unit": "tasks--onEnd-1", "action": "tracker.child.close", "did": "closed #413"} in did(res)
+    assert gh(story)["issues"]["acme/shop#413"]["state"] == "closed"
+    assert story.run("apply", "412")["applied"] == []

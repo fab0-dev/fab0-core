@@ -390,3 +390,12 @@ def test_a_run_without_files_works_on_the_ledger_branch(factory):
     s = states(f.run("status", "7"))
     assert s["classify"] == ("waiting", {"gate": "gate"}), "its auto gate decides from step R2d"
     assert s["label"] == ("blocked", {"order": "classify"})
+
+
+def test_a_home_checkout_off_the_base_branch_is_warned_about(story):
+    """From R6: a person checked out the run's pull request in the home checkout, and its older wiring ran."""
+    assert "warnings" not in story.run("status", "412")
+    story.checkout("home", "elsewhere", "main")
+    assert story.run("status", "412")["warnings"] == [
+        "the home checkout is on elsewhere, not main; its .fab0/ wiring is the one used"
+    ]

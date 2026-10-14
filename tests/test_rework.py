@@ -1,9 +1,12 @@
 """Artifacts, checks and staleness: what makes a recorded attempt stand, and what hands out the next one."""
 
 import json
+import os
+import subprocess
+import sys
 from pathlib import Path
 
-from conftest import git, start_docs
+from conftest import SCRIPT, git, start_docs
 from test_run import (
     BRIEF,
     DOCS_GH,
@@ -208,3 +211,79 @@ def test_a_tool_input_is_a_call_for_the_agent(factory):
     brief = handouts(f.run("next", "7"))["classify"]["brief"]
     assert "Call the tool `mcp__tracker__search_issues` with:" in brief
     assert '"query": "Checkout fails"' in brief and '"state": "open"' in brief
+
+
+def test_a_comment_review_on_the_spec_reworks_it(story):
+    """From R6: a step outside foreach reads its own pull request's reviews. With one account for people and
+    agents, GitHub allows only a comment review on one's own pull request, so a comment counts."""
+    story.edit("steps/spec.yaml", lambda d: d.update(inputs=["intent", "reviews"]))
+    started(story)
+    h = handouts(story.run("next", "412"))["spec"]
+    files = {("home", "specs/412.md"): SPEC, ("home", "work/412/tasks.yaml"): ONE_TASK}
+    finish(story, "412", h, start_work(story, h), files, {"summary": "Wrote the spec."})
+    assert states(story.run("status", "412"))["spec"] == ("waiting", {"gate": "human"})
+    data = gh(story)
+    review = {"id": 1, "state": "COMMENTED", "user": "po-user", "body": "Split the work so two tasks run at once."}
+    data["pulls"]["acme/shop"].append(
+        {"number": 5, "branch": "fab0/412/spec", "base": "fab0/412/base", "reviews": [review]}
+    )
+    set_gh(story, data)
+    nxt = story.run("next", "412")
+    assert states(nxt)["spec"] == ("ready", {"rework": ["stale"]})
+    assert "Split the work so two tasks run at once." in handouts(nxt)["spec"]["brief"]
+
+
+def test_a_merge_decides_over_the_reviews_before_it(story):
+    """From R6: a product owner answered in a review and merged. The merge decides (D34): the merged spec isn't
+    sent back for its own pull request's reviews."""
+    story.edit("steps/spec.yaml", lambda d: d.update(inputs=["intent", "reviews"]))
+    started(story)
+    h = handouts(story.run("next", "412"))["spec"]
+    files = {("home", "specs/412.md"): SPEC, ("home", "work/412/tasks.yaml"): ONE_TASK}
+    finish(story, "412", h, start_work(story, h), files, {"summary": "Wrote the spec."})
+    data = gh(story)
+    review = {"id": 1, "state": "COMMENTED", "user": "po-user", "body": "Answer: a demo hotel."}
+    data["pulls"]["acme/shop"].append(
+        {"number": 5, "branch": "fab0/412/spec", "base": "fab0/412/base", "reviews": [review], "state": "merged"}
+    )
+    set_gh(story, data)
+    story.merge("home", "fab0/412/spec", "fab0/412/base")
+    assert states(story.run("status", "412"))["spec"] == ("done", None)
+
+
+def test_reviews_of_a_merged_pull_request_stay_with_the_unit(story):
+    """From R6: an answer given on a pull request merged at an older attempt still reaches the new attempt."""
+    story.edit("steps/spec.yaml", lambda d: d.update(inputs=["intent", "reviews"]))
+    started(story)
+    h = handouts(story.run("next", "412"))["spec"]
+    files = {("home", "specs/412.md"): SPEC, ("home", "work/412/tasks.yaml"): ONE_TASK}
+    finish(story, "412", h, start_work(story, h), files, {"summary": "Wrote the spec."})
+    data = gh(story)
+    answer = {"id": 1, "state": "COMMENTED", "user": "po-user", "body": "Answer: a demo hotel."}
+    later = {"id": 2, "state": "COMMENTED", "user": "po-user", "body": "And keep it short."}
+    data["pulls"]["acme/shop"] += [
+        {"number": 5, "branch": "fab0/412/spec", "base": "fab0/412/base", "reviews": [answer], "state": "merged"},
+        {"number": 6, "branch": "fab0/412/spec", "base": "fab0/412/base", "reviews": [later]},
+    ]
+    set_gh(story, data)
+    brief = handouts(story.run("next", "412"))["spec"]["brief"]
+    assert "Reviews on acme/shop#5, acme/shop#6, oldest first" in brief
+    assert brief.index("Answer: a demo hotel.") < brief.index("And keep it short.")
+
+
+def test_the_main_checkouts_wiring_governs_from_a_worktree(story):
+    """From R6: a session that calls the engine from inside a unit's worktree gets the project's wiring, not
+    the copy on the unit's branch."""
+    started(story)
+    h = handouts(story.run("next", "412"))["spec"]
+    tree = start_work(story, h)["home"]
+    story.edit("steps/spec.yaml", lambda d: d.update(inputs=["intent", "reviews"]))
+    run = subprocess.run(
+        [sys.executable, str(SCRIPT), "next", "412"],
+        cwd=tree,
+        capture_output=True,
+        text=True,
+        env={**os.environ, "FAB0_GH_FAKE": str(story.gh_path)},
+    )
+    brief = next(x for x in json.loads(run.stdout)["handouts"] if x["unit"] == "spec")["brief"]
+    assert "### reviews" in brief

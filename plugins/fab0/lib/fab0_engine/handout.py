@@ -179,7 +179,7 @@ def action_handout(run: Run, unit: Unit) -> dict:
     if unit.lifecycle:
         out["lifecycle"] = unit.lifecycle
     try:
-        if unit.step["action"] == "tracker.child.sync":
+        if unit.step["action"] in ("tracker.child.sync", "tracker.child.close"):
             from .actions import child_titles
 
             args = unit.step.get("with", {})
