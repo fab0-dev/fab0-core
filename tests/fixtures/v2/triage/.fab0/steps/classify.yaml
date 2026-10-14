@@ -1,0 +1,6 @@
+step: classify
+agent: triager
+model: fast
+inputs: [report, similar]
+return: {questions: optional, schema: .fab0/schemas/classification.json}
+owner: support

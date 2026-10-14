@@ -1,0 +1,149 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "fab0 artifact (.fab0/artifacts/<name>.yaml), schema 2",
+  "description": "A piece of state that steps pass on. Its kind says where it lives and how it is hashed for staleness. fab0 prescribes no formats: a factory chooses them, and may point to its own schema.",
+  "type": "object",
+  "required": ["artifact", "kind"],
+  "additionalProperties": false,
+  "properties": {
+    "artifact": {"$ref": "#/$defs/name"},
+    "kind": {"enum": ["file", "issue", "pr", "tool", "none"]},
+    "file": {
+      "description": "A file or directory in a repository. `{run}` and `{unit}` fill the path.",
+      "type": "object",
+      "required": ["repo", "path"],
+      "additionalProperties": false,
+      "properties": {
+        "repo": {"type": "string", "minLength": 1},
+        "path": {"type": "string", "minLength": 1},
+        "format": {
+          "description": "The engine parses `yaml` and `json`, and reads sections of `markdown`. Any other value is opaque.",
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "issue": {
+      "description": "A part of a tracker item, read and never written by a step.",
+      "type": "object",
+      "required": ["part"],
+      "additionalProperties": false,
+      "properties": {
+        "of": {"description": "The run's item (default) or the unit's.", "enum": ["run", "unit"]},
+        "part": {"enum": ["body", "title", "comments", "field", "labels"]},
+        "field": {"type": "string", "minLength": 1}
+      },
+      "if": {"properties": {"part": {"const": "field"}}},
+      "then": {"required": ["field"]}
+    },
+    "pr": {
+      "description": "A part of a pull request: the run's (default) or the unit's.",
+      "type": "object",
+      "required": ["part"],
+      "additionalProperties": false,
+      "properties": {"of": {"enum": ["run", "unit"]}, "part": {"enum": ["body", "reviews", "diff"]}}
+    },
+    "tool": {
+      "description": "A value read through a tool call that the session makes; hashed by value.",
+      "type": "object",
+      "required": ["name"],
+      "additionalProperties": false,
+      "properties": {"name": {"type": "string", "pattern": "^[A-Za-z0-9_.:-]+$"}, "with": {"type": "object"}}
+    },
+    "schema": {
+      "description": "A project-relative JSON Schema, for `yaml` and `json` files.",
+      "type": "string",
+      "minLength": 1
+    },
+    "elements": {
+      "description": "For a list artifact used by `foreach`: which field of an element holds what. Defaults are the keys' own names.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "at": {"description": "A dotted path to the list, if it isn't the top level.", "type": "string", "minLength": 1},
+        "id": {"type": "string", "minLength": 1},
+        "title": {"type": "string", "minLength": 1},
+        "repo": {"type": "string", "minLength": 1},
+        "after": {"type": "string", "minLength": 1},
+        "paths": {"type": "string", "minLength": 1}
+      }
+    },
+    "verify": {
+      "type": "array",
+      "items": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": ["sections"],
+            "additionalProperties": false,
+            "properties": {"sections": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}}}
+          },
+          {
+            "type": "object",
+            "required": ["lint"],
+            "additionalProperties": false,
+            "properties": {"lint": {"type": "string", "pattern": "\\{path\\}"}}
+          },
+          {
+            "type": "object",
+            "required": ["script"],
+            "additionalProperties": false,
+            "properties": {"script": {"type": "string", "pattern": "^[A-Za-z0-9_.-]+$"}}
+          }
+        ]
+      }
+    },
+    "keep": {
+      "description": "`run`: removed from the result by `git.remove-run-artifacts`. `durable` (default): kept.",
+      "enum": ["run", "durable"]
+    }
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"kind": {"const": "file"}}},
+      "then": {
+        "required": ["file"],
+        "not": {"anyOf": [{"required": ["issue"]}, {"required": ["pr"]}, {"required": ["tool"]}]}
+      }
+    },
+    {
+      "if": {"properties": {"kind": {"const": "issue"}}},
+      "then": {
+        "required": ["issue"],
+        "not": {"anyOf": [{"required": ["file"]}, {"required": ["pr"]}, {"required": ["tool"]}, {"required": ["keep"]}]}
+      }
+    },
+    {
+      "if": {"properties": {"kind": {"const": "pr"}}},
+      "then": {
+        "required": ["pr"],
+        "not": {"anyOf": [{"required": ["file"]}, {"required": ["issue"]}, {"required": ["tool"]}, {"required": ["keep"]}]}
+      }
+    },
+    {
+      "if": {"properties": {"kind": {"const": "tool"}}},
+      "then": {
+        "required": ["tool"],
+        "not": {"anyOf": [{"required": ["file"]}, {"required": ["issue"]}, {"required": ["pr"]}, {"required": ["keep"]}]}
+      }
+    },
+    {
+      "if": {"properties": {"kind": {"const": "none"}}},
+      "then": {
+        "not": {
+          "anyOf": [
+            {"required": ["file"]},
+            {"required": ["issue"]},
+            {"required": ["pr"]},
+            {"required": ["tool"]},
+            {"required": ["schema"]},
+            {"required": ["verify"]},
+            {"required": ["keep"]},
+            {"required": ["elements"]}
+          ]
+        }
+      }
+    }
+  ],
+  "$defs": {"name": {"type": "string", "pattern": "^[a-z][a-z0-9-]*$"}}
+}

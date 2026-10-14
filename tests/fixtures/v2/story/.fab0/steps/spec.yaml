@@ -1,0 +1,10 @@
+step: spec
+agent: spec-author
+model: deep
+skills: [spec-format]
+inputs: [intent]
+outputs: [spec, tasks]
+repos: {write: [home], read: [all]}
+paths: ["specs/**", "work/**"]
+return: {questions: optional}
+owner: product-owner

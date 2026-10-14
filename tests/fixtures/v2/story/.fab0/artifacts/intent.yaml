@@ -1,0 +1,3 @@
+artifact: intent
+kind: issue
+issue: {of: run, part: body}

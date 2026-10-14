@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "The factory's own classification format",
+  "type": "object",
+  "required": ["severity", "area"],
+  "additionalProperties": false,
+  "properties": {
+    "severity": {"enum": ["low", "medium", "high"]},
+    "area": {"type": "string", "pattern": "^[a-z-]+$"},
+    "duplicate_of": {"type": "integer", "minimum": 1}
+  }
+}

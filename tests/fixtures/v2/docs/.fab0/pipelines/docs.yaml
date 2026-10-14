@@ -1,0 +1,18 @@
+pipeline: docs
+trigger: {manual: {id: "^docs-[0-9]+$"}}
+onStart: [git.run-branch, pr.open-run]
+steps:
+  - step: brief
+    gate: human
+  - foreach: pages
+    steps:
+      - step: write
+        gate: {auto: {agent: docs-reviewer, model: deep, skills: [docs-style]}, merge: human, retry: 1}
+  - parallel:
+      spelling: [spelling]
+      links: [links]
+      index:
+        - step: index
+          after: [spelling]
+    gate: {auto: {command: "markdownlint docs"}, merge: auto}
+onEnd: [pr.ready]

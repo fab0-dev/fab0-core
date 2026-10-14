@@ -1,0 +1,28 @@
+pipeline: triage
+trigger: {issue: {label: needs-triage}}
+git: {branching: flat}
+onStart:
+  - tracker.label: {add: [triaging], remove: [needs-triage]}
+steps:
+  - step: classify
+    gate: {auto: {command: "python3 .fab0/checks/classification.py"}, retry: 1, then: fail}
+  - step: label
+    action: tracker.label
+    with: {add: ["severity-{classify.severity}", "area-{classify.area}"]}
+  - when:
+      any:
+        - {tracker: {label: severity-high}}
+        - {all: [{verdict: classify, is: approve}, {not: {tracker: {label: wontfix}}}]}
+    steps:
+      - step: page
+        tool: mcp__chat__post_message
+        with: {channel: on-call, text: "High-severity report {run}: {run.title}"}
+        outputs: [acknowledgement]
+        gate: {human: {via: label, label: acknowledged}}
+    else:
+      - step: backlog
+        action: tracker.field
+        with: {State: Backlog}
+onEnd:
+  - tracker.label: {remove: [triaging]}
+  - tracker.comment: {body: "Triaged as {classify.severity} in {classify.area}."}

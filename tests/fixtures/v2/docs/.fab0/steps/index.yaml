@@ -1,0 +1,8 @@
+step: index
+agent: docs-writer
+model: fast
+instructions: Rebuild docs/index.md so it lists every page under docs/, one line each.
+inputs: [pages]
+repos: {write: [home]}
+paths: ["docs/index.md"]
+owner: docs-owner

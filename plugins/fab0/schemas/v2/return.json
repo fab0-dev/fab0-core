@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "fab0 return: what an agent or tool step returns, schema 2",
+  "description": "The base schema. A step's `return:` makes `questions` optional or required, and may give `data` a project schema.",
+  "type": "object",
+  "required": ["summary"],
+  "additionalProperties": false,
+  "properties": {
+    "summary": {"type": "string", "minLength": 1},
+    "data": {"description": "Structured output, checked against the step's `return.schema`."}
+  },
+  "$defs": {
+    "extensions": {
+      "questions": {
+        "description": "What a person must answer before the unit can go on. Leaving it out, or an empty list, means none.",
+        "type": "array",
+        "items": {"type": "string", "minLength": 1}
+      }
+    }
+  }
+}

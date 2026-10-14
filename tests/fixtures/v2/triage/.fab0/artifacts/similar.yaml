@@ -1,0 +1,3 @@
+artifact: similar
+kind: tool
+tool: {name: mcp__tracker__search_issues, with: {query: "{run.title}", state: open}}

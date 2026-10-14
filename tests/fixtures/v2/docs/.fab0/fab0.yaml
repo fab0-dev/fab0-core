@@ -1,0 +1,12 @@
+# A documentation factory: started by hand, pages written in parallel, checks run side by side.
+schema: 2
+repos:
+  home:    {path: ., github: acme/docs, owner: docs-owner}
+  product: {path: ../shop, github: acme/shop}
+people:
+  docs-owner: {github: [docs-user]}
+tracker: {kind: github, owner: acme}
+git: {branching: run, branches: {run: "docs/{run}", unit: "docs/{run}--{unit}"}}
+models:
+  claude-code: {deep: opus, balanced: sonnet, fast: haiku}
+pipelines: [docs]

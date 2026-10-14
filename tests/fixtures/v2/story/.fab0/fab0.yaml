@@ -1,0 +1,20 @@
+# A delivery factory: a spec, tasks in two repositories, reviewed and merged by agents.
+schema: 2
+repos:
+  home:    {path: ., github: acme/shop, owner: product-owner}
+  backend: {path: ../shop-api, github: acme/shop-api, owner: backend, key: BE}
+people:
+  product-owner: {github: [po-user]}
+  backend:       {github: [be-user]}
+tracker: {kind: github, owner: acme, project: 7, fields: {state: State}}
+git:
+  base: main
+  branching: run
+  auto_merge: {into: [run]}
+parallel: {max: 3, cross_run: warn}
+ledger: {path: "work/{run}/ledger"}
+models:
+  claude-code: {deep: opus, balanced: sonnet, fast: haiku}
+profiles:
+  cheap: {models: {claude-code: {deep: sonnet}}}
+pipelines: [story]

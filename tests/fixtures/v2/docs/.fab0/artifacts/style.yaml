@@ -1,0 +1,3 @@
+artifact: style
+kind: tool
+tool: {name: mcp__styleguide__get_guide, with: {product: shop}}

@@ -1,0 +1,6 @@
+artifact: brief
+kind: file
+file: {repo: home, path: "briefs/{run}.md", format: markdown}
+verify:
+  - sections: [Intent, Findings, Outline]
+  - lint: "markdownlint {path}"

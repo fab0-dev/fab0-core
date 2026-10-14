@@ -1,0 +1,152 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "fab0 project file (.fab0/fab0.yaml), schema 2",
+  "description": "The one project file, in the home repo. It names the repositories, the people, the tracker, the git policy, the model classes and the pipelines of a factory.",
+  "type": "object",
+  "required": ["schema", "repos", "pipelines", "models"],
+  "additionalProperties": false,
+  "properties": {
+    "schema": {"const": 2},
+    "repos": {
+      "description": "The repositories a factory reads and writes. `home` holds `.fab0/`.",
+      "type": "object",
+      "required": ["home"],
+      "propertyNames": {"$ref": "#/$defs/name", "not": {"enum": ["all", "unit", "run"]}},
+      "additionalProperties": {
+        "type": "object",
+        "required": ["path", "github"],
+        "additionalProperties": false,
+        "properties": {
+          "path": {"description": "Path of the checkout, relative to the home repo.", "type": "string", "minLength": 1},
+          "github": {"type": "string", "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"},
+          "owner": {"description": "The role whose turn a human gate in this repository is.", "$ref": "#/$defs/name"},
+          "key": {
+            "description": "A short key for unit names that span repositories.",
+            "type": "string",
+            "pattern": "^[A-Z]{2,3}$"
+          },
+          "base": {"description": "The base branch, if not `git.base`.", "type": "string", "minLength": 1}
+        }
+      }
+    },
+    "people": {
+      "description": "Roles, each mapped to tracker users.",
+      "type": "object",
+      "propertyNames": {"$ref": "#/$defs/name"},
+      "additionalProperties": {
+        "type": "object",
+        "required": ["github"],
+        "additionalProperties": false,
+        "properties": {
+          "github": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "minLength": 1}}
+        }
+      }
+    },
+    "tracker": {
+      "description": "Where runs, units, human decisions and dependencies are tracked. Optional: a factory without a tracker uses manual triggers only.",
+      "type": "object",
+      "required": ["kind"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {"enum": ["github"]},
+        "owner": {
+          "description": "The organisation or user that owns the issues and the project.",
+          "type": "string",
+          "minLength": 1
+        },
+        "project": {
+          "description": "A GitHub Projects number, if the factory shows its state on a board.",
+          "type": "integer",
+          "minimum": 1
+        },
+        "fields": {
+          "description": "Board field names, by purpose.",
+          "type": "object",
+          "additionalProperties": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "git": {"$ref": "#/$defs/git"},
+    "parallel": {
+      "description": "Limits and policy for parallel units.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "max": {"description": "Units of one run that may run at once.", "type": "integer", "minimum": 1},
+        "cross_run": {
+          "description": "What an overlap of path claims with another open run does.",
+          "enum": ["warn", "block"]
+        }
+      }
+    },
+    "ledger": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "description": "Where ledger entries go, in the repository a unit ran in.",
+          "type": "string",
+          "pattern": "\\{run\\}"
+        },
+        "branch": {
+          "description": "A branch that holds the ledger entries of runs that open no pull request, for example a pipeline whose artifacts all live in the tracker. It is pushed, never merged.",
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "pipelines": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/name"}},
+    "models": {
+      "description": "Model classes, per harness.",
+      "type": "object",
+      "required": ["claude-code"],
+      "additionalProperties": {
+        "type": "object",
+        "minProperties": 1,
+        "propertyNames": {"$ref": "#/$defs/name"},
+        "additionalProperties": {"type": "string", "minLength": 1}
+      }
+    },
+    "profiles": {
+      "description": "JSON Merge Patches over this file, chosen at run time.",
+      "type": "object",
+      "propertyNames": {"$ref": "#/$defs/name"},
+      "additionalProperties": {"type": "object"}
+    }
+  },
+  "$defs": {
+    "name": {"type": "string", "pattern": "^[a-z][a-z0-9-]*$"},
+    "git": {
+      "description": "The git workflow. A pipeline may override `branching` and `auto_merge`.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "base": {"description": "The base branch. Default `main`.", "type": "string", "minLength": 1},
+        "branching": {
+          "description": "`run` (default): the run works on a run branch, each unit on a sub-branch whose pull request targets its parent, and only the run's pull request reaches the base. `flat`: each unit's pull request targets the base.",
+          "enum": ["run", "flat"]
+        },
+        "branches": {
+          "description": "Branch name templates. Defaults: run `fab0/{run}/base`, unit `fab0/{run}/{unit}`.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "run": {"type": "string", "pattern": "\\{run\\}"},
+            "unit": {"type": "string", "pattern": "\\{unit\\}"}
+          }
+        },
+        "auto_merge": {
+          "description": "Where an auto gate with `merge: auto` may merge. Default: into run branches only.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "into": {"type": "array", "uniqueItems": true, "items": {"enum": ["run", "base"]}},
+            "allow_base": {"description": "Required for `into: [base]`.", "type": "boolean"}
+          },
+          "if": {"required": ["into"], "properties": {"into": {"contains": {"const": "base"}}}},
+          "then": {"required": ["allow_base"], "properties": {"allow_base": {"const": true}}}
+        }
+      }
+    }
+  }
+}

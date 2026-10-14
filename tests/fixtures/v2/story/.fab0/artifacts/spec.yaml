@@ -1,0 +1,6 @@
+artifact: spec
+kind: file
+file: {repo: home, path: "specs/{run}.md", format: markdown}
+verify:
+  - sections: [Intent, Scope, Scenarios]
+keep: durable
