@@ -22,6 +22,12 @@ def attempts(names: set[str], unit: str) -> list[int]:
     return sorted(int(m.group(1)) for n in names if (m := pattern.match(n)))
 
 
+def gate_attempts(names: set[str], unit: str) -> list[int]:
+    """The attempts of `unit` that an auto gate has decided on."""
+    pattern = re.compile(rf"^{re.escape(unit)}-([1-9][0-9]*)-gate\.yaml$")
+    return sorted(int(m.group(1)) for n in names if (m := pattern.match(n)))
+
+
 def parse(raw: bytes | str, where: str) -> dict:
     try:
         entry = yaml.safe_load(raw)

@@ -31,7 +31,8 @@ import yaml
 from .artifacts import input_hashes
 from .claims import EVERYTHING, overlap
 from .git import Repo
-from .ledger import DEFAULT_PATH, attempts, entry_name, parse
+from .hashing import sha_json
+from .ledger import DEFAULT_PATH, attempts, entry_name, gate_attempts, parse
 from .templates import Unresolved
 from .wiring import EXECUTORS, Wiring
 
@@ -65,6 +66,12 @@ class Unit:
     attempt: int = 1
     rework: dict | None = None  # why the next attempt is needed: stale inputs, missing outputs, failed checks
     history: list = field(default_factory=list)  # every recorded attempt, oldest first
+    gates: dict = field(default_factory=dict)  # attempt -> the auto gate's ledger entry
+    gate_inputs: str | None = None  # a gated block: the hash of its units' attempts its gate must judge
+
+    @property
+    def auto(self) -> dict | None:
+        return self.gate["auto"] if isinstance(self.gate, dict) and "auto" in self.gate else None
 
     @property
     def element_id(self) -> str | None:
@@ -215,9 +222,27 @@ class Run:
             block.state, block.reason = "open", None
             return False
         on_parent = all(self.on_branch(u, ctx.parent) for u in children)
-        block.state = "done" if on_parent else "waiting"
-        block.reason = None if on_parent else {"gate": self.gate_kind(gate)}
-        return on_parent
+        if on_parent:
+            block.state, block.reason = "done", None
+            return True
+        block.state = "waiting"
+        if block.auto is None:
+            block.reason = {"gate": self.gate_kind(gate)}
+            return False
+        # a block's gate judges its units as they are now; a unit that moves on asks for a new decision
+        block.gate_inputs = sha_json({u.id: u.attempt for u in children})
+        self.load_latest(block)
+        latest = block.gates.get(max(block.gates)) if block.gates else None
+        if latest is None or latest.get("inputs", {}).get("units") != block.gate_inputs:
+            block.attempt = max(block.gates, default=0) + 1
+            block.reason = {"gate": self.gate_running(block)}
+        elif latest["gate"]["decision"] == "approve":
+            block.attempt = max(block.gates)
+            block.reason = {"gate": "merge" if gate.get("merge") == "auto" else "human"}
+        else:  # a block isn't retried as a whole: which unit to redo is a person's call (D35)
+            block.attempt = max(block.gates)
+            block.reason = {"escalated": latest["gate"]["decision"]}
+        return False
 
     def walk_block(self, node, ctx: Ctx, reachable: bool, reason: dict | None, pos: str) -> bool:
         if "foreach" in node:
@@ -426,27 +451,12 @@ class Run:
         return (data == cond["equals"]) if "equals" in cond else (data in cond["in"]), None
 
     def verdict(self, step: str) -> str | None:
-        repo = self.repos["home"]
+        """The decision of the auto gate on a step's latest attempt, if it has one yet."""
         for u in self.units:
-            if u.step and u.step["step"] == step and u.latest:
-                repo = self.repos[u.ledger_repo]
-                break
-        names = set()
-        for ref in filter(None, (repo.fresh(b) for b in self._ledger_refs(repo))):
-            names |= repo.names(ref, self.ledger_dir)
-        gates = sorted(n for n in names if re.fullmatch(rf"{re.escape(step)}-\d+-gate\.yaml", n))
-        if not gates:
-            return None
-        latest = max(gates, key=lambda n: int(n.rsplit("-", 2)[1]))
-        for ref in filter(None, (repo.fresh(b) for b in self._ledger_refs(repo))):
-            raw = repo.read_file(ref, f"{self.ledger_dir}/{latest}")
-            if raw is not None:
-                return parse(raw, latest)["gate"].get("decision")
+            if u.step and u.step["step"] == step and u.element_id is None and u.latest:
+                entry = u.gates.get(u.latest["attempt"])
+                return entry["gate"].get("decision") if entry else None
         return None
-
-    def _ledger_refs(self, repo: Repo) -> list[str]:
-        refs = [self.ledger_branch] if self.ledger_branch else [self.run_branch or repo.base]
-        return refs + [u.branch for u in self.units if u.branch]
 
     # ------------------------------------------------------------ artifacts
 
@@ -578,6 +588,10 @@ class Run:
                 listed = repo.names(where, self.ledger_dir)
             for n in listed:
                 names[n] = (kind, where)
+        for n in gate_attempts(set(names), unit.id):
+            name = entry_name(unit.id, n, gate=True)
+            kind, where = names[name]
+            unit.gates[n] = parse(self._read_entry(repo, kind, where, name), f"{repo.name}:{self.ledger_dir}/{name}")
         found = attempts(set(names), unit.id)
         if not found:
             unit.attempt = 1
@@ -586,13 +600,19 @@ class Run:
         for n in found:
             name = entry_name(unit.id, n)
             kind, where = names[name]
-            raw = (
-                (where / self.ledger_dir / name).read_bytes()
-                if kind == "worktree"
-                else repo.read_file(where, f"{self.ledger_dir}/{name}")
+            unit.history.append(
+                parse(self._read_entry(repo, kind, where, name), f"{repo.name}:{self.ledger_dir}/{name}")
             )
-            unit.history.append(parse(raw, f"{repo.name}:{self.ledger_dir}/{name}"))
         unit.latest = unit.history[-1]
+
+    def _read_entry(self, repo: Repo, kind: str, where, name: str) -> bytes:
+        if kind == "worktree":
+            return (where / self.ledger_dir / name).read_bytes()
+        return repo.read_file(where, f"{self.ledger_dir}/{name}")
+
+    def gate_running(self, unit: Unit) -> str:
+        """`running` while a gate hand-out waits for its record, else `gate`: one is due."""
+        return "running" if (self.pending_dir() / f"{unit.id}-gate.json").is_file() else "gate"
 
     def on_branch(self, unit: Unit, branch: str | None) -> bool:
         if not unit.latest:
@@ -626,14 +646,7 @@ class Run:
                 unit.state = "running" if running else "ready"
                 unit.reason = {"rework": sorted(k for k in rework if k != "previous")}
                 return
-            if self.on_branch(unit, unit.ctx.parent) and (self.ledger_branch is None or unit.gate == "none"):
-                unit.state, unit.reason = "done", None
-            elif entry.get("exit", 0) != 0:
-                unit.state, unit.reason = "blocked", {"failed": f"exit {entry['exit']}"}
-            elif entry.get("questions"):
-                unit.state, unit.reason = "waiting", {"questions": len(entry["questions"])}
-            else:
-                unit.state, unit.reason = "waiting", {"gate": self.gate_kind(unit.gate)}
+            self.gated_state(unit, entry)
             return
         problem = self.missing_inputs(unit)
         if problem:
@@ -641,6 +654,51 @@ class Run:
             return
         running = (self.pending_dir() / f"{unit.id}.json").is_file()
         unit.state, unit.reason = ("running" if running else "ready"), None
+
+    def gated_state(self, unit: Unit, entry: dict) -> None:
+        """A recorded attempt that stands: its failure, its questions, or where its gate is."""
+        if self.ledger_branch is None and self.on_branch(unit, unit.ctx.parent):
+            unit.state, unit.reason = "done", None  # merged: whoever merged it decided
+            return
+        if entry.get("exit", 0) != 0:
+            unit.state, unit.reason = "blocked", {"failed": f"exit {entry['exit']}"}  # until an input changes
+            return
+        if entry.get("questions"):
+            unit.state, unit.reason = "waiting", {"questions": len(entry["questions"])}
+            return
+        auto = unit.auto
+        if auto is not None:
+            decided = unit.gates.get(unit.attempt)
+            if decided is None:
+                unit.state, unit.reason = "waiting", {"gate": self.gate_running(unit)}
+                return
+            decision = decided["gate"]["decision"]
+            if decision == "reject":
+                rejects = 0
+                for n in range(unit.attempt, 0, -1):
+                    if unit.gates.get(n, {}).get("gate", {}).get("decision") != "reject":
+                        break
+                    rejects += 1
+                if rejects <= unit.gate.get("retry", 2):
+                    unit.rework = {"rejected": decided.get("verdict", {}), "previous": entry.get("summary", "")}
+                    unit.attempt += 1
+                    running = (self.pending_dir() / f"{unit.id}.json").is_file()
+                    unit.state, unit.reason = ("running" if running else "ready"), {"rework": ["rejected"]}
+                elif unit.gate.get("then", "human") == "fail":
+                    unit.state, unit.reason = "blocked", {"failed": f"rejected {rejects} times"}
+                else:
+                    unit.state, unit.reason = "waiting", {"escalated": f"rejected {rejects} times"}
+                return
+            if decision == "escalate":
+                unit.state, unit.reason = "waiting", {"escalated": "the gate escalated"}
+                return
+        if self.ledger_branch is not None:  # nothing to merge: the gate is the decision
+            human = unit.gate == "human" or isinstance(unit.gate, dict) and "human" in unit.gate
+            done = self.on_branch(unit, None) and not human
+            unit.state, unit.reason = ("done", None) if done else ("waiting", {"gate": "human" if human else "merge"})
+            return
+        merge = "merge" if unit.gate == "none" or (auto is not None and unit.gate.get("merge") == "auto") else "human"
+        unit.state, unit.reason = "waiting", {"gate": merge}
 
     def rework(self, unit: Unit, entry: dict) -> dict:
         """Why the recorded attempt no longer stands: its checks failed, its inputs changed, or an output it
