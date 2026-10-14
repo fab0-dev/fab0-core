@@ -10,8 +10,8 @@ gives every unit a state:
   auto gate decides), or `questions` (a person answers).
 - `blocked`: it can't start, and `reason` says why: `order` (what comes first isn't done), `data` (an input
   is missing), `claim` (an earlier unit claims overlapping paths), `limit` (too many units at once),
-  `invalid-dependency`, `condition` (a `when` can't be decided yet), `failed` (a command exited non-zero),
-  or `start` (the run hasn't started).
+  `tracker` (an item the tracker says comes first is open), `invalid-dependency`, `condition` (a `when`
+  can't be decided yet), `failed` (a command exited non-zero), or `start` (the run hasn't started).
 - `done`: its ledger entry is on the branch it merges into; for an action, its check passes.
 
 Actions (the pipeline's and its blocks' `onStart` and `onEnd`, and action steps) are units too. An action is
@@ -20,6 +20,10 @@ done when its check passes: its result is a fact in git or the tracker, so it wr
 Branches (D10, D14): in `run` branching every unit works on its own branch and merges into its parent: the
 run branch, or the branch of the gated block around it. In `flat` branching the parent is the base branch.
 A pipeline whose steps write no files keeps its ledger on `ledger.branch` (D18), and its units work there.
+
+The tracker's relations are dependencies too (P11, D49). A foreach element's item is the sub-issue
+`tracker.child.sync` made for it; once it exists, its blocked-by relations replace the element's `after`.
+Blocked-by relations of the run's item hold back the whole run, and its other sub-issues hold back its end.
 """
 
 from __future__ import annotations
@@ -31,7 +35,7 @@ from pathlib import Path
 
 import yaml
 
-from .actions import check
+from .actions import check, element_items
 from .artifacts import input_hashes
 from .claims import EVERYTHING, overlap
 from .git import Repo
@@ -129,6 +133,8 @@ class Run:
         self.branch_parents: dict[str, str | None] = {self.run_branch: None} if self.run_branch else {}
         self.units: list[Unit] = []
         self._item: dict | None = None
+        self._children: list | None = None
+        self.element_refs: set[str] = set()  # the tracker items of the run's foreach elements
         self._entries: dict[tuple, dict] = {}
 
     # ------------------------------------------------------------ helpers
@@ -165,6 +171,32 @@ class Run:
                 self._item = self.tracker.issue(self.home.github, int(self.run))
         return self._item
 
+    def item_ref(self) -> str:
+        return f"{self.home.github}#{self.run}"
+
+    def children(self) -> list[dict]:
+        """The sub-issues of the run's item."""
+        if self._children is None:
+            self._children = [] if self.item() is None else self.tracker.sub_issues(self.home.github, int(self.run))
+        return self._children
+
+    def blockers(self, repo: str, number: int, inside: dict[str, str]) -> tuple[list, list, str | None]:
+        """What an item's blocked-by relations mean: the elements of this block it waits on (`inside` maps
+        their items to their ids), the open items outside it, and why the relations are invalid, if they
+        are."""
+        after, open_, invalid = [], [], None
+        for b in self.tracker.blocked_by(repo, number):
+            ref = f"{b['repo']}#{b['number']}"
+            if ref in inside:
+                after.append(inside[ref])
+            elif ref == self.item_ref():
+                invalid = f"blocked by its own run's item {ref}"
+            elif b["state"] != "closed":
+                open_.append(ref)
+            elif b.get("state_reason") == "not_planned":
+                invalid = f"blocked by {ref}, closed as not planned"
+        return after, open_, invalid
+
     def pending_dir(self) -> Path:
         return Path(self.home.out("rev-parse", "--absolute-git-dir")) / "fab0" / "pending" / self.run
 
@@ -177,7 +209,9 @@ class Run:
         ctx = Ctx(parent=self.run_branch)
         started = self.walk_actions(self.p["onStart"], "onStart", "", ctx, True, None)
         steps = self.walk(self.p["steps"], ctx, started, None if started else {"order": "onStart"})
+        end = len(self.units)
         ended = self.walk_actions(self.p["onEnd"], "onEnd", "", ctx, steps, None if steps else {"order": "steps"})
+        self.apply_tracker(self.units[end:])
         self.apply_claims()
         self.apply_limits()
         out["units"] = [u.summary() for u in self.units]
@@ -349,8 +383,11 @@ class Run:
         prefix = self.block_prefix(node, ctx, "foreach", pos)
         started = self.walk_actions(node.get("onStart", []), "onStart", prefix, ctx, True, None, elements)
         ids = [e["id"] for e in elements]
+        elements, items, outside, invalid = (
+            self.element_dependencies(node, ctx, elements) if started else (elements, {}, {}, {})
+        )
         done: dict[str, bool] = {}
-        invalid = self.invalid_after(elements)
+        invalid = self.invalid_after(elements, invalid)
         start = len(self.units)
         for element in self.in_dependency_order(elements, invalid):
             inner = Ctx(parent=ctx.parent, prefix=ctx.prefix, element=element, max=node.get("max"))
@@ -359,8 +396,19 @@ class Run:
                 done[element["id"]] = False
                 continue
             waiting = [d for d in element["after"] if not done.get(d)]
+            closed = [items[d] for d in waiting if items.get(d, {}).get("state") == "closed"]
+            if closed:  # a person closed it, but its work isn't merged: which way to go is theirs to say
+                refs = ", ".join(f"{c['repo']}#{c['number']}" for c in closed)
+                why = {"invalid-dependency": f"{refs} closed, but its work isn't merged"}
+                self.walk(node["steps"], inner, False, why)
+                done[element["id"]] = False
+                continue
             here_reason = {"order": waiting} if waiting else None if started else {"order": "onStart"}
+            first = len(self.units)
             done[element["id"]] = self.walk(node["steps"], inner, started and not waiting, here_reason)
+            for u in self.units[first:]:
+                if outside.get(element["id"]) and u.state == "ready":
+                    u.state, u.reason = "blocked", {"tracker": outside[element["id"]]}
         # walked dependencies first, so `done` is known; listed in the list's order, which decides claims
         position = {i: n for n, i in enumerate(ids)}
         self.units[start:] = sorted(self.units[start:], key=lambda u: position[u.element_id])
@@ -396,10 +444,40 @@ class Run:
             return [], {"data": f"{name} has duplicate ids"}
         return out, None
 
-    @staticmethod
-    def invalid_after(elements: list) -> dict[str, str]:
+    def element_dependencies(self, node: dict, ctx: Ctx, elements: list) -> tuple[list, dict, dict, dict]:
+        """The elements as their tracker items have them: for an element with an item, its `after` becomes the
+        elements its item is blocked by, except that an `after` naming no element stays, so it is reported.
+        Also the items, the open items outside the block each element waits on, and invalid relations."""
+        sync = None
+        for action in node.get("onStart", []):
+            name = action if isinstance(action, str) else next(iter(action))
+            if name == "tracker.child.sync":
+                sync = {} if isinstance(action, str) else action[name]
+        if sync is None or self.item() is None:
+            return elements, {}, {}, {}
+        items = element_items(self, sync, ctx, elements, self.children())
+        inside = {f"{c['repo']}#{c['number']}": i for i, c in items.items()}
+        self.element_refs |= set(inside)
         ids = {e["id"] for e in elements}
-        invalid = {}
+        out, outside, invalid = [], {}, {}
+        for element in elements:
+            item = items.get(element["id"])
+            if item is None:
+                out.append(element)
+                continue
+            after, open_, why = self.blockers(item["repo"], item["number"], inside)
+            unknown = [a for a in element["after"] if a not in ids]
+            out.append({**element, "after": after + unknown, "item": f"{item['repo']}#{item['number']}"})
+            if open_:
+                outside[element["id"]] = open_
+            if why:
+                invalid[element["id"]] = why
+        return out, items, outside, invalid
+
+    @staticmethod
+    def invalid_after(elements: list, invalid: dict | None = None) -> dict[str, str]:
+        ids = {e["id"] for e in elements}
+        invalid = dict(invalid or {})
         for e in elements:
             unknown = [a for a in e["after"] if a not in ids]
             if unknown:
@@ -422,9 +500,13 @@ class Run:
 
         for e in elements:
             visit(e["id"], [])
-        for e in elements:  # waiting on an invalid element is invalid too
-            if e["id"] not in invalid and any(a in invalid for a in e["after"]):
-                invalid[e["id"]] = "after: depends on an invalid element"
+        spread = True
+        while spread:  # waiting on an invalid element is invalid too
+            spread = False
+            for e in elements:
+                if e["id"] not in invalid and any(a in invalid for a in e["after"]):
+                    invalid[e["id"]] = "after: depends on an invalid element"
+                    spread = True
         return invalid
 
     @staticmethod
@@ -502,11 +584,14 @@ class Run:
         if "verdict" in cond:
             return self.verdict(cond["verdict"]) == cond["is"], None
         tracker = cond["tracker"]
-        if "field" in tracker:
-            return UNKNOWN, "tracker fields are read from step R3"
         item = self.item()
         if item is None:
             return UNKNOWN, "the run has no tracker item"
+        if "field" in tracker:
+            board = self.w.project["tracker"]
+            have = self.tracker.fields(self.home.github, int(self.run), board.get("owner"), board.get("project"))
+            name = board.get("fields", {}).get(tracker["field"]["name"], tracker["field"]["name"])
+            return have.get(name) == tracker["field"]["equals"], None
         if "label" in tracker:
             return tracker["label"] in item["labels"], None
         return item["type"] == tracker["type"], None
@@ -885,7 +970,29 @@ class Run:
                 return problem
         return None
 
-    # ------------------------------------------------------------ claims and limits
+    # ------------------------------------------------------------ the tracker, claims and limits
+
+    def apply_tracker(self, end: list[Unit]) -> None:
+        """The run's item: its blocked-by relations hold back every unit not under way, and its sub-issues
+        other than the elements' items hold back the run's end."""
+        item = self.item()
+        if item is None:
+            return
+        _, open_, invalid = self.blockers(self.home.github, int(self.run), {})
+        if open_ or invalid:
+            why = {"invalid-dependency": invalid} if invalid else {"tracker": open_}
+            for u in self.units:
+                if u.state == "ready":
+                    u.state, u.reason = "blocked", why
+            return
+        if not any(u.state == "ready" for u in end):
+            return
+        children = [c for c in self.children() if f"{c['repo']}#{c['number']}" not in self.element_refs]
+        left = [f"{c['repo']}#{c['number']}" for c in children if c["state"] != "closed"]
+        if left:
+            for u in end:
+                if u.state == "ready":
+                    u.state, u.reason = "blocked", {"tracker": left}
 
     def other_claims(self) -> list[tuple[str, str, dict]]:
         """The claims of other open runs: (run, unit, {repo: [globs]}) from the latest ledger entry on each of

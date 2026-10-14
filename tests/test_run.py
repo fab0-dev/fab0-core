@@ -84,15 +84,20 @@ def do_spec(f, tasks=TASKS, spec=SPEC):
 
 
 def sync_children(f, tasks: str) -> None:
-    """What `apply` does for the foreach's onStart: a Task sub-issue per task, titled like it."""
+    """What `apply` does for the foreach's onStart: a Task sub-issue per task, titled like it, blocked by the
+    sub-issues of the tasks it depends on."""
 
     def change(data):
-        children = []
-        for i, task in enumerate(yaml.safe_load(tasks) or []):
-            if isinstance(task, dict) and "title" in task:
-                ref = f"acme/shop#{500 + i}"
-                data["issues"][ref] = {"title": task["title"], "type": "Task"}
-                children.append(ref)
+        children, refs = [], {}
+        listed = [t for t in yaml.safe_load(tasks) or [] if isinstance(t, dict) and "title" in t]
+        for i, task in enumerate(listed):
+            refs[task.get("id")] = ref = f"acme/shop#{500 + i}"
+            data["issues"][ref] = {"title": task["title"], "type": "Task"}
+            children.append(ref)
+        for task in listed:
+            after = [refs[d] for d in task.get("depends_on", []) if d in refs]
+            if after:
+                data["issues"][refs[task["id"]]]["blocked_by"] = after
         data["issues"]["acme/shop#412"]["sub_issues"] = children
 
     f.gh_edit(change)

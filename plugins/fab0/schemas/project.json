@@ -60,7 +60,7 @@
           "minimum": 1
         },
         "fields": {
-          "description": "Board field names, by purpose.",
+          "description": "Board field names, by purpose. `signal`, if given, is a text field where `apply` shows where the run's item and each element's item are: `done`, or the first unit that isn't and why.",
           "type": "object",
           "additionalProperties": {"type": "string", "minLength": 1}
         }
