@@ -6,6 +6,7 @@ One call loops until nothing more can be done:
   approval, within `git.auto_merge` and once its pull request's required checks pass;
 - every unit a person must look at gets a pull request: a draft until its gate approves, then ready. A pull
   request is never turned back into a draft (from #17), and questions and escalations are posted on it once;
+- the ledger branch, if the pipeline keeps one, is pushed;
 - with `tracker.fields.signal` set, the run's item and its elements' items show their state on the board.
 
 Each operation is idempotent: its check comes first, so running `apply` twice changes nothing the second time.
@@ -258,6 +259,20 @@ def unit_pull(run: Run, unit: Unit) -> list[str]:
     return done
 
 
+def publish_ledger(run: Run) -> str | None:
+    """Push the ledger branch when the remote lacks what was recorded on it (D18)."""
+    branch = run.ledger_branch
+    repo = run.home
+    if not branch or not repo.ref_exists(branch) or not Writer(repo).has_remote():
+        return None
+    remote = f"origin/{branch}"
+    if repo.ref_exists(remote) and repo.is_ancestor(branch, remote):
+        return None
+    Writer(repo).push(branch)
+    repo._fresh.clear()
+    return f"pushed {branch}"
+
+
 def describe(unit: Unit) -> str:
     """One line for the board: a unit's state, and why."""
     parts = []
@@ -329,6 +344,9 @@ def apply(run: Run, only: str | None = None) -> dict:
                 for did in unit_pull(run, unit):
                     applied.append({"unit": unit.id, "pull": did})
         if not progress:
+            pushed = publish_ledger(run)
+            if pushed:
+                applied.append({"ledger": pushed})
             applied += [{"item": ref, "signal": text} for ref, text in signals(run, result)]
             return {**result, "applied": applied}
         run = Run(run.w, run.name, run.run, run.actor, run.tracker)  # read everything again

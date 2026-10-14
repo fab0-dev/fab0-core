@@ -197,8 +197,22 @@ class Run:
                 invalid = f"blocked by {ref}, closed as not planned"
         return after, open_, invalid
 
+    def recorded(self) -> bool:
+        """The run has a ledger entry somewhere: on its run branch, its ledger branch or a unit branch."""
+        unit_prefix = self.unit_template.replace("{run}", self.run).split("{unit}")[0]
+        for repo in self.repos.values():
+            if not repo.exists():
+                continue
+            refs = repo.out("for-each-ref", "--format=%(refname:short)", "refs/heads", "refs/remotes/origin")
+            for ref in refs.splitlines():
+                branch = ref.removeprefix("origin/")
+                if branch in (self.run_branch, self.ledger_branch) or branch.startswith(unit_prefix):
+                    if any(n.endswith(".yaml") for n in repo.names(ref, self.ledger_dir)):
+                        return True
+        return False
+
     def pending_dir(self) -> Path:
-        return Path(self.home.out("rev-parse", "--absolute-git-dir")) / "fab0" / "pending" / self.run
+        return self.home.common_dir() / "fab0" / "pending" / self.run  # shared by every checkout of home
 
     # ------------------------------------------------------------ the walk
 
@@ -207,7 +221,15 @@ class Run:
         run's pull request, `done`."""
         out = {"ok": True, "run": self.run, "pipeline": self.name}
         ctx = Ctx(parent=self.run_branch)
-        started = self.walk_actions(self.p["onStart"], "onStart", "", ctx, True, None)
+        if self.recorded():  # started: what onStart did may be undone on purpose, by onEnd or a person (D53)
+            for i, action in enumerate(self.p["onStart"]):
+                name = action if isinstance(action, str) else next(iter(action))
+                uid = f"onStart-{i + 1}"
+                step = {"step": uid, "action": name, "with": {} if isinstance(action, str) else action[name]}
+                self.units.append(Unit(id=uid, step=step, label=name, ctx=ctx, lifecycle="onStart", state="done"))
+            started = True
+        else:
+            started = self.walk_actions(self.p["onStart"], "onStart", "", ctx, True, None)
         steps = self.walk(self.p["steps"], ctx, started, None if started else {"order": "onStart"})
         end = len(self.units)
         ended = self.walk_actions(self.p["onEnd"], "onEnd", "", ctx, steps, None if steps else {"order": "steps"})
@@ -868,15 +890,28 @@ class Run:
             if decision == "escalate":
                 unit.state, unit.reason = "waiting", {"escalated": "the gate escalated"}
                 return
+        labelled = self.labelled(unit)
         if self.ledger_branch is not None:  # nothing to merge: the gate is the decision
-            human = unit.gate == "human" or isinstance(unit.gate, dict) and "human" in unit.gate
+            human = (unit.gate == "human" or isinstance(unit.gate, dict) and "human" in unit.gate) and not labelled
             done = self.on_branch(unit, None) and not human
             unit.state, unit.reason = ("done", None) if done else ("waiting", {"gate": "human" if human else "merge"})
             return
-        merge = "merge" if unit.gate == "none" or (auto is not None and unit.gate.get("merge") == "auto") else "human"
+        merge = (
+            "merge"
+            if unit.gate == "none" or labelled or (auto is not None and unit.gate.get("merge") == "auto")
+            else "human"
+        )
         if self.merge_trouble(unit, entry, merge):
             return
         unit.state, unit.reason = "waiting", {"gate": merge}
+
+    def labelled(self, unit: Unit) -> bool:
+        """A human gate decided through the tracker: the run's item carries the gate's label."""
+        human = unit.gate.get("human") if isinstance(unit.gate, dict) else None
+        if not isinstance(human, dict) or human.get("via") != "label":
+            return False
+        item = self.item()
+        return item is not None and human["label"] in item["labels"]
 
     def merge_trouble(self, unit: Unit, entry: dict, merge: str) -> bool:
         """A unit ready to merge whose branch conflicts with its parent, or whose required checks fail, goes

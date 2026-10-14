@@ -7,6 +7,7 @@ from fab0_engine.actions import check
 from fab0_engine.schedule import Ctx, Run
 from fab0_engine.tracker import make_tracker
 from fab0_engine.wiring import Wiring
+from test_gates import classify
 from test_run import SPEC, actions, finish, handouts, start_work, started, states
 
 
@@ -153,3 +154,14 @@ def test_two_matching_triggers_need_a_choice(factory):
     f.edit("pipelines/spike.yaml", lambda d: d["trigger"]["manual"].update(id="^[0-9]+$"))
     res = f.run("status", "412", expect=2)
     assert res["error"] == "run 412: pass --pipeline; it matches story, spike"
+
+
+def test_onstart_isnt_redone_once_the_run_has_records(factory):
+    gh = {"user": "u", "issues": {"acme/support#7": {"title": "Fails", "body": "x", "labels": ["needs-triage"]}}}
+    f = factory("triage").init_git(gh)
+    f.run("apply", "7")
+    classify(f, {"severity": "low", "area": "billing"})
+    f.gh_edit(lambda d: d["issues"]["acme/support#7"].update(labels=[]))  # what onEnd, or a person, may do
+    res = f.run("apply", "7")
+    assert actions(res)["onStart-1"] == ("tracker.label", "done", None)
+    assert not any(a["unit"] == "onStart-1" for a in res["applied"]), "from the e2e check: no tug of war with onEnd"

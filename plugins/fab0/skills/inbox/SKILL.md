@@ -1,6 +1,6 @@
 ---
 name: inbox
-description: Show what every open fab0 run needs from the current person, what anyone can run, and what is waiting on others. Read-only; its suggestions are exactly what /fab0:run would do.
+description: Show every open fab0 run of this project, what waits on the current person, what anyone can run now, and what is blocked and why. Read-only.
 argument-hint: "[--as USER]"
 ---
 
@@ -8,19 +8,19 @@ argument-hint: "[--as USER]"
 
 1. Run `fab0-resolve inbox $ARGUMENTS`. It changes nothing.
 2. If it fails, show the error and stop.
-3. Render its JSON as follows. Leave out empty sections, and keep each line short.
+3. Render its JSON as below. Leave out empty sections and keep each line short.
 
 ```
-Ready for you (<user>):
-  <command>   <type>: <task_title or title>   <stage>[, <note>]
-Pending actions (anyone may run):
-  <command>   <type>: <title>   <action>
+Yours (<user>: <roles>):
+  <run> <unit>   <reason>   <pull, if any>
+Ready to run:
+  <command>   <units, comma-separated>
 Waiting on others:
-  <run>[ <task>]   <type>: <task_title or title>   <reason>
+  <run> <unit>   <owner>: <reason>
 Blocked:
-  <run>   <type>: <title>   <reason>
-Done, issue still open:
-  <run>   <type>: <title>
+  <run> <unit>   <reason>
 ```
+
+Write a reason as its key and value, for example `gate human`, `questions 2`, `tracker acme/shop#9`, `invalid-dependency after makes a cycle: T1 -> T2 -> T1`. Under the sections, list the open runs once (`runs`: run, pipeline, title), and any `skipped` traces with why.
 
 Don't run anything it suggests. Running is the person's choice, through `/fab0:run`.

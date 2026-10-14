@@ -215,6 +215,10 @@ def test_a_command_gate_on_the_ledger_branch_decides_alone(factory):
     assert states(res)["label"] == ("done", None)
     page = handouts(res)["page"]
     assert page["executor"] == "tool" and page["with"]["text"] == "High-severity report 7: Checkout fails"
+    finish(f, "7", page, {"home": Path(page["branches"][0]["worktree"])}, returned={"summary": "Posted."})
+    assert states(f.run("status", "7"))["page"] == ("waiting", {"gate": "human"})
+    f.gh_edit(lambda d: d["issues"]["acme/support#7"]["labels"].append("acknowledged"))
+    assert states(f.run("status", "7"))["page"] == ("done", None), "the label is the person's decision"
 
 
 def test_then_fail_stops_the_run_after_the_retries(factory):

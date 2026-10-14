@@ -7,8 +7,7 @@
   --version             the fab0 release of this engine
 
   apply RUN             perform what is due: actions, merges, pull requests (writes git and the tracker)
-
-`inbox` comes in step R4 of the refactor.
+  inbox                 every open run, and what it needs from whom; read-only
 
 Exit codes: 0 ok, 1 error, 2 usage, 3 invalid wiring, 4 refused.
 """
@@ -25,12 +24,12 @@ from .apply import apply as apply_run
 from .errors import EXIT_ERROR, EXIT_INVALID, EXIT_OK, EXIT_REFUSED, EXIT_USAGE, Fail
 from .gates import gate_handout, record_gate, save_gate_pending
 from .handout import action_handout, claim, handout, record, save_pending
+from .inbox import inbox
 from .schedule import Run
 from .tracker import make_tracker
 from .version import read_version
 from .wiring import Wiring
 
-NOT_YET = {"inbox": "R4"}
 RUN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 
@@ -199,11 +198,10 @@ def cmd_apply(args) -> dict:
     return apply_run(load_run(args), args.unit)
 
 
-def cmd_not_yet(args) -> dict:
-    raise Fail(
-        EXIT_REFUSED,
-        f"'{args.command}' is not built yet in schema 2; it returns in step {NOT_YET[args.command]} of the refactor",
-    )
+def cmd_inbox(args) -> dict:
+    wiring = load_wiring(args)
+    tracker = make_tracker()
+    return inbox(wiring, tracker, actor(args, tracker), lambda run: pick_pipeline(wiring, run, None, tracker))
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -240,10 +238,11 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--output", help="a command gate's output, kept as the finding when it fails")
     p.set_defaults(handler=cmd_record)
 
-    for name, step in NOT_YET.items():
-        p = sub.add_parser(name, help=f"not built yet (refactor step {step})")
-        p.add_argument("rest", nargs=argparse.REMAINDER)
-        p.set_defaults(handler=cmd_not_yet)
+    p = sub.add_parser("inbox", help="every open run, and what it needs from whom; read-only")
+    p.add_argument("--as", dest="as_user", help="the person asking (default: the tracker login)")
+    p.add_argument("--project", help="the home repo (default: found from the current directory)")
+    p.add_argument("--profile", help="a profile from fab0.yaml to apply")
+    p.set_defaults(handler=cmd_inbox)
 
     args = parser.parse_args(argv)
     if args.version:
