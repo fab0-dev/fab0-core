@@ -12,6 +12,7 @@ from pathlib import Path
 
 import yaml
 
+from .actions import FOREACH_ONLY, RUN_LEVEL
 from .catalogue import ACTIONS
 from .merge import merge_patch
 from .schemas import check_schema_file, core_schema, schema_errors
@@ -228,6 +229,11 @@ class Wiring:
             self.check_skills(where, "skills", step.get("skills", []))
         if executor == "action":
             self.check_action(where, "action", step["action"])
+            if step["action"] in RUN_LEVEL + FOREACH_ONLY:
+                self.error(
+                    where,
+                    f"action: {step['action']} can't be a step; it belongs in a pipeline's or a foreach's lifecycle",
+                )
         if problem := step.get("return", {}).get("schema") and check_schema_file(step["return"]["schema"], self.root):
             self.error(where, f"return.schema: {problem}")
         for io in ("inputs", "outputs"):
@@ -295,6 +301,9 @@ class Pipeline:
             ):
                 self.error(f"git.auto_merge: {message}")
         self._check_actions("onStart", d["onStart"])
+        names = [a if isinstance(a, str) else next(iter(a)) for a in d["onStart"]]
+        if self.policy["branching"] == "run" and "git.run-branch" not in names:
+            self.error("onStart: run branching needs git.run-branch, which creates the run branch")
         self._walk(d["steps"], "steps", available=self._read_only(), in_foreach=False, in_parallel=None)
         self._check_actions("onEnd", d["onEnd"])
         if not any(self.w.writes_files(s) for s in self.steps.values()) and "branch" not in self.w.project.get(
@@ -319,10 +328,15 @@ class Pipeline:
             except re.error as exc:
                 self.error(f"trigger.manual.id: not a regular expression: {exc}")
 
-    def _check_actions(self, at: str, actions: list) -> None:
+    def _check_actions(self, at: str, actions: list, place: str = "pipeline") -> None:
+        """`place`: `pipeline` (its onStart and onEnd), `foreach` or `parallel` (a block's), or `step`."""
         for i, action in enumerate(actions):
             name = action if isinstance(action, str) else next(iter(action))
             self.w.check_action(self.where, f"{at}[{i}]", name)
+            if name in RUN_LEVEL and place != "pipeline":
+                self.error(f"{at}[{i}]: {name} acts on the whole run; it belongs in the pipeline's onStart or onEnd")
+            if name in FOREACH_ONLY and not (place == "foreach" and at.endswith("onStart")):
+                self.error(f"{at}[{i}]: {name} makes an item per element; it belongs in a foreach's onStart")
             if not isinstance(action, str):
                 self._check_templates(f"{at}[{i}]", action[name])
 
@@ -384,7 +398,8 @@ class Pipeline:
                     self._check_gate(here, node["gate"], node)
                 for key in ("onStart", "onEnd"):
                     if key in node:
-                        self._check_actions(f"{here}.{key}", node[key])
+                        kind = "foreach" if "foreach" in node else "parallel"
+                        self._check_actions(f"{here}.{key}", node[key], kind)
             if isinstance(node, str) or "step" in node:
                 available = self._walk_step(node, here, available, in_foreach)
             elif "foreach" in node:

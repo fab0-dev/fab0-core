@@ -3,7 +3,7 @@
 import json
 from pathlib import Path
 
-from conftest import git
+from conftest import git, start_docs
 from test_run import (
     BRIEF,
     DOCS_GH,
@@ -74,7 +74,7 @@ def test_checks_that_keep_failing_stop_the_unit(story):
 
 def test_a_lint_verifier_runs_on_the_written_file(factory):
     f = factory("docs").init_git(DOCS_GH)
-    f.branch("home", "docs/docs-1", "main")
+    start_docs(f)
     h = handouts(f.run("next", "docs-1"))["brief"]
     pages = json.dumps([{"slug": "intro", "file": "docs/intro.md"}])
     files = {("home", "briefs/docs-1.md"): BRIEF + "LINT-FAIL\n", ("home", "work/docs-1/pages.json"): pages}
@@ -111,11 +111,9 @@ def test_a_review_asking_for_changes_reworks_the_unit(story):
     implement_t1(story)
     data = gh(story)
     review = {"id": 1, "state": "CHANGES_REQUESTED", "user": "be-user", "body": "Handle a full hotel."}
-    data["pulls"] = {
-        "acme/shop-api": [
-            {"number": 9, "branch": "fab0/412/implement-T1", "base": "fab0/412/base", "reviews": [review]}
-        ]
-    }
+    data["pulls"]["acme/shop-api"] = [
+        {"number": 9, "branch": "fab0/412/implement-T1", "base": "fab0/412/base", "reviews": [review]}
+    ]
     set_gh(story, data)
     nxt = story.run("next", "412")
     assert states(nxt)["implement-T1"] == ("ready", {"rework": ["stale"]})
@@ -129,11 +127,9 @@ def test_an_approving_review_changes_nothing(story):
     implement_t1(story)
     data = gh(story)
     review = {"id": 1, "state": "APPROVED", "user": "be-user", "body": "Fine."}
-    data["pulls"] = {
-        "acme/shop-api": [
-            {"number": 9, "branch": "fab0/412/implement-T1", "base": "fab0/412/base", "reviews": [review]}
-        ]
-    }
+    data["pulls"]["acme/shop-api"] = [
+        {"number": 9, "branch": "fab0/412/implement-T1", "base": "fab0/412/base", "reviews": [review]}
+    ]
     set_gh(story, data)
     assert states(story.run("status", "412"))["implement-T1"] == ("waiting", {"gate": "gate"})
 
@@ -206,7 +202,7 @@ def test_a_tool_input_is_a_call_for_the_agent(factory):
     f = factory("triage").init_git(
         {
             "user": "support-user",
-            "issues": {"acme/support#7": {"title": "Checkout fails", "body": "500.", "labels": ["needs-triage"]}},
+            "issues": {"acme/support#7": {"title": "Checkout fails", "body": "500.", "labels": ["triaging"]}},
         }
     )
     brief = handouts(f.run("next", "7"))["classify"]["brief"]

@@ -48,6 +48,15 @@ class Repo:
     def sha(self, ref: str) -> str:
         return self.out("rev-parse", f"{ref}^{{commit}}")
 
+    def is_ancestor(self, a: str, b: str) -> bool:
+        return self._git("merge-base", "--is-ancestor", a, b).returncode == 0
+
+    def removed_at(self, ref: str, path: str) -> str | None:
+        """The commit before the one that removed `path` on `ref`'s history, if one did."""
+        run = self._git("log", "-1", "--format=%H", "--diff-filter=D", ref, "--", path)
+        sha = run.stdout.decode().strip()
+        return f"{sha}^" if run.returncode == 0 and sha else None
+
     def read_file(self, ref: str, path: str) -> bytes | None:
         run = self._git("cat-file", "blob", f"{ref}:{path}")
         return run.stdout if run.returncode == 0 else None

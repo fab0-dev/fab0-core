@@ -3,8 +3,8 @@
 import json
 from pathlib import Path
 
-from conftest import git
-from test_run import BRIEF, DOCS_GH, do_spec, finish, handouts, start_work, states
+from conftest import git, start_docs
+from test_run import BRIEF, DOCS_GH, actions, do_spec, finish, handouts, start_work, states
 
 ONE_TASK = "- {id: T1, title: Booking API, repo: backend, files: [src/a.py]}\n"
 
@@ -115,7 +115,7 @@ def test_a_verdict_is_checked_and_must_be_handed_out(story):
 
 def test_a_human_merge_after_approval(factory):
     f = factory("docs").init_git(DOCS_GH)
-    f.branch("home", "docs/docs-1", "main")
+    start_docs(f)
     brief = handouts(f.run("next", "docs-1"))["brief"]
     pages = json.dumps([{"slug": "intro", "file": "docs/intro.md"}])
     files = {("home", "briefs/docs-1.md"): BRIEF, ("home", "work/docs-1/pages.json"): pages}
@@ -131,7 +131,7 @@ def test_a_human_merge_after_approval(factory):
 
 def test_a_gated_block_is_judged_as_a_whole(factory):
     f = factory("docs").init_git(DOCS_GH)
-    f.branch("home", "docs/docs-1", "main")
+    start_docs(f)
     brief = handouts(f.run("next", "docs-1"))["brief"]
     files = {("home", "briefs/docs-1.md"): BRIEF, ("home", "work/docs-1/pages.json"): "[]"}
     finish(f, "docs-1", brief, start_work(f, brief), files, {"summary": "Nothing to write."})
@@ -156,7 +156,7 @@ def test_a_gated_block_is_judged_as_a_whole(factory):
 
 def test_an_approved_block_merges_and_the_run_ends(factory):
     f = factory("docs").init_git(DOCS_GH)
-    f.branch("home", "docs/docs-1", "main")
+    start_docs(f)
     brief = handouts(f.run("next", "docs-1"))["brief"]
     files = {("home", "briefs/docs-1.md"): BRIEF, ("home", "work/docs-1/pages.json"): "[]"}
     finish(f, "docs-1", brief, start_work(f, brief), files, {"summary": "Nothing to write."})
@@ -178,12 +178,15 @@ def test_an_approved_block_merges_and_the_run_ends(factory):
     assert states(f.run("status", "docs-1"))["parallel-3"] == ("waiting", {"gate": "merge"})
     f.merge("home", "docs/docs-1--parallel-3", "docs/docs-1")
     end = f.run("status", "docs-1")
-    assert states(end)["parallel-3"] == ("done", None) and end["kind"] == "end"
+    assert states(end)["parallel-3"] == ("done", None) and actions(end)["onEnd-1"] == ("pr.ready", "done", None)
+    assert end["kind"] == "waiting" and end["reason"] == {"gate": "human", "merge": "docs/docs-1 into the base"}
+    f.merge("home", "docs/docs-1", "main")
+    assert f.run("status", "docs-1")["kind"] == "done"
 
 
 TRIAGE_GH = {
     "user": "support-user",
-    "issues": {"acme/support#7": {"title": "Checkout fails", "body": "500 on pay.", "labels": ["needs-triage"]}},
+    "issues": {"acme/support#7": {"title": "Checkout fails", "body": "500 on pay.", "labels": ["triaging"]}},
 }
 
 
@@ -204,7 +207,10 @@ def test_a_command_gate_on_the_ledger_branch_decides_alone(factory):
     label = handouts(res)["label"]
     assert label["executor"] == "action" and label["action"] == "tracker.label"
     assert label["with"] == {"add": ["severity-high", "area-billing"]}
-    finish(f, "7", label, {"home": Path(label["branches"][0]["worktree"])}, returned={"summary": "Labelled."})
+    assert label["missing"] == "add severity-high, area-billing"
+    refused = f.run("record", "7", "label", "--exit", "0", expect=4)
+    assert "is an action" in refused["error"]
+    f.gh_edit(lambda d: d["issues"]["acme/support#7"]["labels"].extend(["severity-high", "area-billing"]))
     res = f.run("next", "7")
     assert states(res)["label"] == ("done", None)
     page = handouts(res)["page"]

@@ -1,10 +1,13 @@
-"""Facts read from the tracker: who is running, and the run's item. Read-only; `apply` writes (step R3).
+"""Facts read from the tracker: who is running, the run's item and its children, board fields, pull requests.
 
-Set FAB0_GH_FAKE=<file.json> to read the facts from a JSON file instead of `gh` (used by the tests):
+Read-only; `apply` writes (step R3). Set FAB0_GH_FAKE=<file.json> to read the facts from a JSON file instead
+of `gh` (used by the tests):
 
     {"user": "...",
-     "issues": {"owner/repo#7": {"title", "body", "labels": [...], "type", "state", "comments": [...]}},
-     "pulls": {"owner/repo": [{"number", "branch", "base", "state", "body", "diff", "reviews": [...]}]}}
+     "issues": {"owner/repo#7": {"title", "body", "labels": [...], "type", "state", "assignees": [...],
+                                 "comments": [...], "sub_issues": ["owner/repo#8"], "fields": {"Stage": "spec"}}},
+     "pulls": {"owner/repo": [{"number", "branch", "base", "state", "draft", "body", "diff",
+                               "reviews": [...], "comments": [...]}]}}
 
 A review is {"id", "state", "body", "user"}; a comment is {"id", "body", "user"}.
 """
@@ -18,27 +21,89 @@ from pathlib import Path
 
 from .errors import EXIT_ERROR, Fail
 
+FIELDS_QUERY = """
+query($owner: String!, $repo: String!, $number: Int!) {
+  repository(owner: $owner, name: $repo) {
+    issue(number: $number) {
+      projectItems(first: 20) {
+        nodes {
+          project { number owner { ... on Organization { login } ... on User { login } } }
+          fieldValues(first: 50) {
+            nodes {
+              ... on ProjectV2ItemFieldSingleSelectValue { name field { ... on ProjectV2FieldCommon { name } } }
+              ... on ProjectV2ItemFieldTextValue { text field { ... on ProjectV2FieldCommon { name } } }
+              ... on ProjectV2ItemFieldNumberValue { number field { ... on ProjectV2FieldCommon { name } } }
+              ... on ProjectV2ItemFieldDateValue { date field { ... on ProjectV2FieldCommon { name } } }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+"""
+
+
+def _issue(d: dict, number: int) -> dict:
+    return {
+        "number": number,
+        "title": d.get("title", ""),
+        "body": d.get("body") or "",
+        "labels": d.get("labels", []),
+        "type": d.get("type"),
+        "state": d.get("state", "open"),
+        "assignees": d.get("assignees", []),
+    }
+
 
 class GhCli:
-    def _api(self, path: str):
-        run = subprocess.run(["gh", "api", path], capture_output=True, text=True)
+    def _gh(self, *args: str) -> str:
+        run = subprocess.run(["gh", *args], capture_output=True, text=True)
         if run.returncode:
-            raise Fail(EXIT_ERROR, f"gh api {path} failed: {run.stderr.strip()}")
-        return json.loads(run.stdout or "null")
+            raise Fail(EXIT_ERROR, f"gh {' '.join(args[:2])} failed: {run.stderr.strip()}")
+        return run.stdout
+
+    def _api(self, path: str):
+        return json.loads(self._gh("api", path) or "null")
 
     def user(self) -> str:
         return self._api("user")["login"]
 
-    def issue(self, repo: str, number: int) -> dict:
-        d = self._api(f"repos/{repo}/issues/{number}")
-        return {
-            "number": d["number"],
+    @staticmethod
+    def _from_api(d: dict) -> dict:
+        fields = {
             "title": d["title"],
-            "body": d.get("body") or "",
+            "body": d.get("body"),
             "labels": [label["name"] for label in d.get("labels") or []],
             "type": (d.get("type") or {}).get("name"),
             "state": d["state"],
+            "assignees": [a["login"] for a in d.get("assignees") or []],
         }
+        return _issue(fields, d["number"])
+
+    def issue(self, repo: str, number: int) -> dict:
+        return self._from_api(self._api(f"repos/{repo}/issues/{number}"))
+
+    def sub_issues(self, repo: str, number: int) -> list[dict]:
+        found = []
+        for d in self._api(f"repos/{repo}/issues/{number}/sub_issues?per_page=100"):
+            found.append({**self._from_api(d), "repo": d["repository_url"].split("/repos/", 1)[1]})
+        return found
+
+    def fields(self, repo: str, number: int, owner: str, project: int) -> dict:
+        """The item's field values on one project board, by field name."""
+        repo_owner, name = repo.split("/")
+        args = ["-f", f"query={FIELDS_QUERY}", "-F", f"owner={repo_owner}", "-F", f"repo={name}"]
+        data = json.loads(self._gh("api", "graphql", *args, "-F", f"number={number}"))
+        for item in data["data"]["repository"]["issue"]["projectItems"]["nodes"]:
+            board = item["project"]
+            if board["number"] == project and (board.get("owner") or {}).get("login") == owner:
+                values = {}
+                for v in item["fieldValues"]["nodes"]:
+                    if v and v.get("field"):
+                        values[v["field"]["name"]] = next(v[k] for k in ("name", "text", "number", "date") if k in v)
+                return values
+        return {}
 
     def comments(self, repo: str, number: int) -> list[dict]:
         data = self._api(f"repos/{repo}/issues/{number}/comments?per_page=100")
@@ -51,11 +116,8 @@ class GhCli:
         if not data:
             return None
         d = max(data, key=lambda p: p["number"])
-        return {
-            "number": d["number"],
-            "state": "merged" if d.get("merged_at") else d["state"],
-            "body": d.get("body") or "",
-        }
+        state = "merged" if d.get("merged_at") else d["state"]
+        return {"number": d["number"], "state": state, "draft": bool(d.get("draft")), "body": d.get("body") or ""}
 
     def reviews(self, repo: str, number: int) -> list[dict]:
         data = self._api(f"repos/{repo}/pulls/{number}/reviews?per_page=100")
@@ -70,10 +132,7 @@ class GhCli:
         ]
 
     def diff(self, repo: str, number: int) -> str:
-        run = subprocess.run(["gh", "pr", "diff", str(number), "--repo", repo], capture_output=True, text=True)
-        if run.returncode:
-            raise Fail(EXIT_ERROR, f"gh pr diff {number} --repo {repo} failed: {run.stderr.strip()}")
-        return run.stdout
+        return self._gh("pr", "diff", str(number), "--repo", repo)
 
 
 class GhFake:
@@ -83,32 +142,44 @@ class GhFake:
     def user(self) -> str:
         return self.data["user"]
 
-    def issue(self, repo: str, number: int) -> dict:
+    def _raw(self, repo: str, number: int) -> dict:
         d = self.data.get("issues", {}).get(f"{repo}#{number}")
         if d is None:
             raise Fail(EXIT_ERROR, f"no issue {repo}#{number}")
-        return {
-            "number": number,
-            "title": d.get("title", ""),
-            "body": d.get("body", ""),
-            "labels": d.get("labels", []),
-            "type": d.get("type"),
-            "state": d.get("state", "open"),
-        }
+        return d
+
+    def issue(self, repo: str, number: int) -> dict:
+        return _issue(self._raw(repo, number), number)
+
+    def sub_issues(self, repo: str, number: int) -> list[dict]:
+        found = []
+        for ref in self._raw(repo, number).get("sub_issues", []):
+            r, n = ref.split("#")
+            found.append({**self.issue(r, int(n)), "repo": r})
+        return found
+
+    def fields(self, repo: str, number: int, owner: str, project: int) -> dict:
+        return self._raw(repo, number).get("fields", {})
 
     def comments(self, repo: str, number: int) -> list[dict]:
-        return self.data.get("issues", {}).get(f"{repo}#{number}", {}).get("comments", [])
-
-    def _pulls(self, repo: str, branch: str, base: str) -> list[dict]:
-        pulls = self.data.get("pulls", {}).get(repo, [])
-        return [p for p in pulls if p["branch"] == branch and p.get("base", base) == base]
+        issue = self.data.get("issues", {}).get(f"{repo}#{number}")
+        if issue is not None:
+            return issue.get("comments", [])
+        pulls = [p for p in self.data.get("pulls", {}).get(repo, []) if p["number"] == number]
+        return pulls[0].get("comments", []) if pulls else []
 
     def pull(self, repo: str, branch: str, base: str) -> dict | None:
-        found = self._pulls(repo, branch, base)
+        pulls = self.data.get("pulls", {}).get(repo, [])
+        found = [p for p in pulls if p["branch"] == branch and p.get("base", base) == base]
         if not found:
             return None
         p = max(found, key=lambda p: p["number"])
-        return {"number": p["number"], "state": p.get("state", "open"), "body": p.get("body", "")}
+        return {
+            "number": p["number"],
+            "state": p.get("state", "open"),
+            "draft": p.get("draft", False),
+            "body": p.get("body", ""),
+        }
 
     def _pull(self, repo: str, number: int) -> dict:
         return next(p for p in self.data.get("pulls", {}).get(repo, []) if p["number"] == number)

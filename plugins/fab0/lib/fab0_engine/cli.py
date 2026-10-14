@@ -21,7 +21,7 @@ from pathlib import Path
 
 from .errors import EXIT_ERROR, EXIT_INVALID, EXIT_OK, EXIT_REFUSED, EXIT_USAGE, Fail
 from .gates import gate_handout, record_gate, save_gate_pending
-from .handout import handout, record, save_pending
+from .handout import action_handout, handout, record, save_pending
 from .schedule import Run
 from .tracker import make_tracker
 from .version import read_version
@@ -85,20 +85,60 @@ def actor(args, tracker) -> str:
     return name
 
 
+def triggered(wiring: Wiring, name: str, run: str, item) -> bool:
+    """Whether run `run` belongs to pipeline `name`, by its trigger."""
+    trigger = wiring.pipelines[name]["trigger"]
+    if "manual" in trigger:
+        pattern = trigger["manual"].get("id")
+        return not pattern or re.search(pattern, run) is not None
+    issue = trigger["issue"]
+    found = item()
+    if found is None:
+        return False
+    return ("type" not in issue or found["type"] == issue["type"]) and (
+        "label" not in issue or issue["label"] in found["labels"]
+    )
+
+
+def pick_pipeline(wiring: Wiring, run: str, asked: str | None, tracker) -> str:
+    """The pipeline a run belongs to: the one asked for, or the only one whose trigger the run matches."""
+    names = wiring.project["pipelines"]
+    cache: dict = {}
+
+    def item():
+        if "item" not in cache:
+            try:
+                cache["item"] = (
+                    tracker.issue(wiring.project["repos"]["home"]["github"], int(run)) if run.isdigit() else None
+                )
+            except Fail:
+                cache["item"] = None
+        return cache["item"]
+
+    if asked:
+        if asked not in names:
+            raise Fail(EXIT_USAGE, f"no pipeline '{asked}' in fab0.yaml")
+        if "manual" in wiring.pipelines[asked]["trigger"] and not triggered(wiring, asked, run, item):
+            raise Fail(EXIT_USAGE, f"run id '{run}' doesn't match {wiring.pipelines[asked]['trigger']['manual']['id']}")
+        return asked
+    if len(names) == 1:
+        name = names[0]
+        if "manual" in wiring.pipelines[name]["trigger"] and not triggered(wiring, name, run, item):
+            raise Fail(EXIT_USAGE, f"run id '{run}' doesn't match {wiring.pipelines[name]['trigger']['manual']['id']}")
+        return name
+    matching = [n for n in names if triggered(wiring, n, run, item)]
+    if len(matching) == 1:
+        return matching[0]
+    which = f"it matches {', '.join(matching)}" if matching else "it matches none of their triggers"
+    raise Fail(EXIT_USAGE, f"run {run}: pass --pipeline; {which}", pipelines=names)
+
+
 def load_run(args) -> Run:
     wiring = load_wiring(args)
     if not RUN_ID.match(args.run):
         raise Fail(EXIT_USAGE, f"run id '{args.run}': letters, digits, . _ - only")
-    names = wiring.project["pipelines"]
-    pipeline = args.pipeline or (names[0] if len(names) == 1 else None)
-    if pipeline is None:
-        raise Fail(EXIT_USAGE, f"pass --pipeline: this project runs {', '.join(names)}")
-    if pipeline not in names:
-        raise Fail(EXIT_USAGE, f"no pipeline '{pipeline}' in fab0.yaml")
-    trigger = wiring.pipelines[pipeline]["trigger"]
-    if "manual" in trigger and trigger["manual"].get("id") and not re.search(trigger["manual"]["id"], args.run):
-        raise Fail(EXIT_USAGE, f"run id '{args.run}' doesn't match {trigger['manual']['id']}")
     tracker = make_tracker()  # read-only: issue and pull request facts, from gh or FAB0_GH_FAKE
+    pipeline = pick_pipeline(wiring, args.run, args.pipeline, tracker)
     run = Run(wiring, pipeline, args.run, actor(args, tracker) if args.command != "status" else "", tracker)
     if not run.home.exists():
         raise Fail(EXIT_ERROR, f"the home repo {run.home.path} is not a git repository")
@@ -116,7 +156,10 @@ def cmd_next(args) -> dict:
     for unit in run.units:
         if args.unit and unit.id != args.unit:
             continue
-        if unit.step is not None and unit.state in ("ready", "running"):
+        if unit.step is not None and "action" in unit.step:
+            if unit.state == "ready":
+                handouts.append(action_handout(run, unit))
+        elif unit.step is not None and unit.state in ("ready", "running"):
             out = handout(run, unit)
             save_pending(run, unit, out)
             handouts.append(out)

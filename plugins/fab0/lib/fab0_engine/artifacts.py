@@ -83,6 +83,13 @@ def file_view(run, name: str, ctx, tree: Path | None = None) -> View:
     else:
         ref = repo.fresh(run.parent_in(repo, ctx.parent)) or repo.fresh(repo.base)
         content = (repo.read_file(ref, path) or read_tree(repo, ref, path)) if ref else None
+        if (
+            content is None
+            and ref
+            and run.w.artifacts[name].get("keep") == "run"
+            and (gone := repo.removed_at(ref, path))
+        ):
+            content = repo.read_file(gone, path) or read_tree(repo, gone, path)  # as it was before the run's end
         where = f"`{repo.name}:{path}` at `{ref}`"
         how = f"Read it with `git -C {repo.path} show {ref}:{path}`."
     if content is None:

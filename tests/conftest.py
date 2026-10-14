@@ -70,6 +70,11 @@ class Factory:
         git(self.repo(repo), "add", "-A")
         git(self.repo(repo), "commit", "-q", "-m", message)
 
+    def gh_edit(self, change) -> None:
+        data = json.loads(self.gh_path.read_text())
+        change(data)
+        self.gh_path.write_text(json.dumps(data))
+
     def merge(self, repo: str, branch: str, into: str) -> None:
         """What merging a pull request does: `branch` into `into`, with the checkout left where it was."""
         path = self.repo(repo)
@@ -107,3 +112,30 @@ def factory(tmp_path):
 def story(factory):
     """The story fixture factory with git repositories, and its run 412 on a fake tracker."""
     return factory("story").init_git(STORY_GH)
+
+
+def start_story(f) -> None:
+    """What `apply` does for the story fixture's onStart: run branches, a draft run pull request, the field."""
+    for repo in ("home", "backend"):
+        if subprocess.run(["git", "-C", f.repo(repo), "rev-parse", "-q", "--verify", "fab0/412/base"]).returncode:
+            f.branch(repo, "fab0/412/base", "main")
+
+    def change(data):
+        data.setdefault("pulls", {}).setdefault("acme/shop", []).append(
+            {"number": 1, "branch": "fab0/412/base", "base": "main", "draft": True}
+        )
+        data["issues"]["acme/shop#412"]["fields"] = {"State": "Started"}
+
+    f.gh_edit(change)
+
+
+def start_docs(f) -> None:
+    """The docs fixture's onStart: the run branch and its pull request."""
+    f.branch("home", "docs/docs-1", "main")
+    f.gh_edit(
+        lambda d: (
+            d.setdefault("pulls", {})
+            .setdefault("acme/docs", [])
+            .append({"number": 1, "branch": "docs/docs-1", "base": "main"})
+        )
+    )
