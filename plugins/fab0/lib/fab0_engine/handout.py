@@ -10,7 +10,10 @@ import copy
 import json
 from pathlib import Path
 
+from .artifacts import content_hash, input_hashes, read_disk, verify, view
+from .claims import covers
 from .errors import EXIT_REFUSED, EXIT_USAGE, Fail
+from .git import scope_diff
 from .ledger import dump as dump_entry
 from .ledger import entry_name, parse
 from .schedule import Run, Unit
@@ -18,8 +21,6 @@ from .schemas import core_schema, load_schema, resolve_schema_ref, schema_errors
 from .templates import Unresolved, render
 from .version import read_version
 from .wiring import HARNESS
-
-INLINE_LIMIT = 64 * 1024  # text inputs up to this size go in the brief, so agents need no git to read them
 
 
 def return_schema(run: Run, step: dict) -> dict:
@@ -46,7 +47,9 @@ def worktree(run: Run, repo_name: str, branch: str, unit: str) -> str:
 def branches(run: Run, unit: Unit) -> list[dict]:
     """The branches the session needs, in each repository the unit works in, oldest first.
 
-    The last one in each repository is the unit's own, with the `worktree` to check it out in.
+    The last one in each repository is the unit's own, with the `worktree` to check it out in. An existing
+    branch marked `sync` gets its `from` merged in before work starts: a rework after its parent moved. Never
+    a rebase, since nothing is force-pushed.
     """
     if run.ledger_branch:
         repo, b = run.repos["home"], run.ledger_branch
@@ -64,40 +67,32 @@ def branches(run: Run, unit: Unit) -> list[dict]:
                 break
             branch, parent = parent, run.branch_parents.get(parent)
         chain[0]["worktree"] = worktree(run, name, unit.branch, unit.id)
+        if chain[0]["exists"] and unit.attempt > 1:
+            chain[0]["sync"] = True
         out.extend(reversed(chain))
     return out
 
 
-def input_text(run: Run, unit: Unit, name: str) -> list[str]:
-    art = run.w.artifacts[name]
-    lines = [f"### {name}", ""]
-    if art["kind"] == "file":
-        repo, path = run.artifact_location(name, unit.ctx)
-        ref = repo.fresh(run.parent_in(repo, unit.ctx.parent)) or repo.base
-        raw = repo.read_file(ref, path)
-        if raw is None:
-            lines.append(f"Not there yet: `{repo.name}:{path}`.")
-        elif len(raw) <= INLINE_LIMIT:
-            fmt = art["file"].get("format", "")
-            lines += [f"`{repo.name}:{path}` at `{ref}`:", "", f"````{fmt}", raw.decode(errors="replace"), "````"]
-        else:
-            lines.append(f"Too large to inline. Read it with `git -C {repo.path} show {ref}:{path}`.")
-    elif art["kind"] == "issue":
-        item = run.item()
-        part = art["issue"]["part"]
-        if item is None or part not in item:
-            lines.append(f"The run's tracker item has no {part} to show.")
-        else:
-            value = item[part]
-            lines += [
-                "From the run's tracker item:",
-                "",
-                "````",
-                value if isinstance(value, str) else json.dumps(value),
-                "````",
-            ]
-    else:
-        lines.append(f"A {art['kind']} artifact; reading it comes in step R2c.")
+def rework_lines(unit: Unit) -> list[str]:
+    """Why this attempt exists, when it isn't the first."""
+    why = unit.rework or {}
+    if not why:
+        return []
+    lines = [
+        "## Rework",
+        "",
+        f"Attempt {unit.attempt - 1} is on your branch; build on it, and address all of this:",
+        "",
+    ]
+    if "stale" in why:
+        lines.append("- These inputs changed since then, so read them again: " + ", ".join(why["stale"]) + ".")
+    if "missing" in why:
+        lines.append("- These outputs are gone and must be written again: " + ", ".join(why["missing"]) + ".")
+    for name, errors in why.get("verify", {}).items():
+        lines.append(f"- {name} failed its checks:")
+        lines += [f"  - {e}" for e in errors]
+    if "previous" in why:
+        lines += ["", "What the previous attempt said it did:", "", why["previous"]]
     return lines + [""]
 
 
@@ -105,6 +100,7 @@ def brief(run: Run, unit: Unit, schema: dict, trees: dict[str, str]) -> str:
     step = unit.step
     title = f"# {step['step']}" + (f" for {unit.element_id}" if unit.element_id else "") + f": run {run.run}"
     lines = [title, "", f"Pipeline {run.name}, attempt {unit.attempt}.", f"Handed out by fab0 {read_version()}.", ""]
+    lines += rework_lines(unit)
     if "instructions" in step:
         lines += ["## Instructions", "", step["instructions"], ""]
     if unit.ctx.element:
@@ -113,7 +109,7 @@ def brief(run: Run, unit: Unit, schema: dict, trees: dict[str, str]) -> str:
     if inputs:
         lines += ["## Inputs", ""]
         for name in inputs:
-            lines += input_text(run, unit, name)
+            lines += [f"### {name}", "", view(run, name, unit.ctx, unit).text, ""]
     if step.get("outputs"):
         lines += ["## Outputs", ""]
         for name in step["outputs"]:
@@ -192,17 +188,55 @@ def handout(run: Run, unit: Unit) -> dict:
 
 
 def save_pending(run: Run, unit: Unit, out: dict) -> None:
+    """Keep the hand-out until `record`: the inputs' hashes, the commit each repository starts from, and the
+    state of every repository the unit may not write, so changes there are seen."""
     folder = run.pending_dir()
     folder.mkdir(parents=True, exist_ok=True)
-    # the unit's inputs are read at its parent's head; a parent that doesn't exist yet is cut from the oldest
-    # branch of the chain that does, so that is the commit the unit starts from
-    chain = [b for b in out["branches"] if b["repo"] == unit.ledger_repo]
-    repo = run.repos[unit.ledger_repo]
-    ref = repo.fresh(chain[-1]["from"]) or repo.fresh(chain[0]["from"])
-    bases = {"branch": chain[-1]["from"], "sha": repo.sha(ref)} if ref else {}
-    pending = {**out, "pipeline": run.name, "actor": run.actor, "base": bases, "ledger_dir": run.ledger_dir}
+    # a parent that doesn't exist yet is cut from the oldest branch of the chain that does
+    starts = {}
+    for name in {b["repo"] for b in out["branches"]}:
+        chain = [b for b in out["branches"] if b["repo"] == name]
+        repo = run.repos[name]
+        ref = repo.fresh(chain[-1]["from"]) or repo.fresh(chain[0]["from"])
+        if ref:
+            starts[name] = {"branch": chain[-1]["from"], "sha": repo.sha(ref)}
+    others = [n for n in run.repos if n not in unit.write]
+    pending = {
+        **out,
+        "pipeline": run.name,
+        "actor": run.actor,
+        "starts": starts,
+        "inputs": input_hashes(run, unit),
+        "scope": {n: run.repos[n].scope_state() for n in others},
+        "ledger_dir": run.ledger_dir,
+        "outputs": unit.step.get("outputs", []),
+    }
     pending.pop("brief", None)
     (folder / f"{unit.id}.json").write_text(json.dumps(pending, indent=2))
+
+
+def check_writes(run: Run, unit: Unit, pending: dict, trees: dict) -> dict[str, list[str]]:
+    """The unit changed only what it claimed, and nothing in a repository it may not write.
+
+    Changes outside the claims are findings for the next attempt; changes in another repository refuse the
+    record, because they can't be told apart from a person's own work there.
+    """
+    changed = {
+        n: diff for n in pending["scope"] if (diff := scope_diff(pending["scope"][n], run.repos[n].scope_state()))
+    }
+    if changed:
+        raise Fail(EXIT_REFUSED, f"{unit.id} changed repositories it may not write", changed=changed)
+    findings = {}
+    for name, tree in trees.items():
+        start = pending["starts"].get(name)
+        if not start:
+            continue
+        files = run.repos[name].changed_since(tree, start["sha"])
+        globs = pending["claims"].get(name, [])
+        outside = [f for f in files if not f.startswith(run.ledger_dir + "/") and not any(covers(g, f) for g in globs)]
+        if outside:
+            findings[f"claims:{name}"] = [f"{f} is outside the claimed paths ({', '.join(globs)})" for f in outside]
+    return findings
 
 
 def record(run: Run, unit_id: str, returned: dict | None, exit_code: int | None) -> dict:
@@ -210,6 +244,9 @@ def record(run: Run, unit_id: str, returned: dict | None, exit_code: int | None)
     if not path.is_file():
         raise Fail(EXIT_REFUSED, f"{unit_id} wasn't handed out to this checkout; run next first")
     pending = json.loads(path.read_text())
+    unit = next((u for u in run.units if u.id == unit_id), None)
+    if unit is None:
+        raise Fail(EXIT_REFUSED, f"{unit_id} is no unit of run {run.run} now; run next again")
     executor = pending["executor"]
     entry: dict = {
         "step": pending["step"],
@@ -222,11 +259,14 @@ def record(run: Run, unit_id: str, returned: dict | None, exit_code: int | None)
         entry["unit"] = pending["element_id"]
     if "model" in pending:
         entry["model"] = pending["model"]
-    if not pending["base"]:
+    start = pending["starts"].get(pending["repo"])
+    if not start:
         raise Fail(
             EXIT_REFUSED, f"{unit_id}: the branch it starts from, {pending['branches'][0]['from']}, doesn't exist"
         )
-    entry["base"] = pending["base"]
+    entry["base"] = start
+    if pending["inputs"]:
+        entry["inputs"] = pending["inputs"]
     if pending["claims"]:
         entry["claims"] = [f"{repo}:{g}" for repo, globs in pending["claims"].items() for g in globs]
     gate = pending["gate"]
@@ -238,9 +278,7 @@ def record(run: Run, unit_id: str, returned: dict | None, exit_code: int | None)
         entry["summary"] = f"exit {exit_code}"
     else:
         if returned is None:
-            raise Fail(
-                EXIT_USAGE, f"a{'n' if executor[0] in 'aeiou' else ''} {executor} step is recorded with --return"
-            )
+            raise Fail(EXIT_USAGE, f"this {executor} step is recorded with --return")
         schema = pending.get("return_schema") or core_schema("return")
         schema = {k: v for k, v in schema.items() if k != "$defs"}
         errors = schema_errors(returned, schema)
@@ -251,16 +289,47 @@ def record(run: Run, unit_id: str, returned: dict | None, exit_code: int | None)
             entry["questions"] = returned["questions"]
         if "data" in returned:
             entry["data"] = returned["data"]
-    repo = run.repos[pending["repo"]]
-    tree = repo.worktrees().get(pending["branch"])
-    if tree is None:
-        raise Fail(EXIT_REFUSED, f"check out {pending['branch']} in {repo.path} before recording {unit_id}")
+    trees = {}
+    for name in {b["repo"] for b in pending["branches"]}:
+        tree = run.repos[name].worktrees().get(pending["branch"])
+        if tree is None:
+            raise Fail(EXIT_REFUSED, f"check out {pending['branch']} in {run.repos[name].path} before recording")
+        trees[name] = Path(tree)
+    outputs, checks = {}, {}
+    for name in pending["outputs"]:
+        if run.w.artifacts[name]["kind"] != "file":
+            continue
+        repo, rel = run.artifact_location(name, unit.ctx)
+        tree = trees.get(repo.name)
+        if tree is None:
+            checks[name] = [f"{rel} is in {repo.name}, which this unit doesn't write"]
+            continue
+        h = content_hash(read_disk(tree, rel))
+        if h:
+            outputs[name] = h
+        errors = verify(run, name, unit.ctx, tree)
+        checks[name] = errors or "pass"
+    for key, errors in check_writes(run, unit, pending, trees).items():
+        checks[key] = errors
+    if outputs:
+        entry["outputs"] = outputs
+    if checks:
+        entry["verify"] = checks
     name = entry_name(unit_id, pending["attempt"])
-    target = Path(tree) / pending["ledger_dir"] / name
+    target = trees[pending["repo"]] / pending["ledger_dir"] / name
     if target.exists():
         raise Fail(EXIT_REFUSED, f"{target} exists; the ledger is append-only")
     parse(dump_entry(entry), name)  # the entry itself must be valid
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(dump_entry(entry))
     path.unlink()
-    return {"ok": True, "unit": unit_id, "attempt": pending["attempt"], "entry": str(target), "recorded": entry}
+    failed = sorted(k for k, v in checks.items() if v != "pass")
+    return {
+        "ok": True,
+        "unit": unit_id,
+        "attempt": pending["attempt"],
+        "entry": str(target),
+        "verified": not failed,
+        "failed": failed,
+        "recorded": entry,
+    }

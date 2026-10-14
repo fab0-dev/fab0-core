@@ -49,7 +49,7 @@ STORY = [
     ("artifacts/spec.yaml", lambda d: d["file"].update(repo="web"), "file.repo: no repo 'web'"),
     ("artifacts/spec.yaml", lambda d: d.update(schema="x.json"), "only yaml and json files have a schema"),
     ("artifacts/tasks.yaml", lambda d: d.update(schema=".fab0/schemas/none.json"), "none.json not found"),
-    ("artifacts/notes.yaml", lambda d: d.update(elements={"id": "slug"}), "elements: only yaml and json"),
+    ("artifacts/notes.yaml", lambda d: d.update(elements={"id": "slug"}), "elements: only yaml and json files"),
     (
         "artifacts/notes.yaml",
         lambda d: d.update(verify=[{"sections": ["A"]}]) or d["file"].update(format="text"),

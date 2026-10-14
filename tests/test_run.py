@@ -5,12 +5,8 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from conftest import git
+from conftest import STORY_GH, git
 
-STORY_GH = {
-    "user": "po-user",
-    "issues": {"acme/shop#412": {"title": "Extend a booking", "body": "Guests extend a booking.", "type": "Story"}},
-}
 SPEC = "# Extend a booking\n\n## Intent\n\nOne more night.\n\n## Scope\n\nBookings.\n\n## Scenarios\n\n- S1\n"
 TASKS = """- {id: T1, title: Booking API, repo: backend, files: [src/a.py]}
 - {id: T2, title: Pricing, repo: backend, files: [src/b.py], depends_on: [T1]}
@@ -65,12 +61,6 @@ def finish(f, run: str, handout: dict, trees: dict, files: dict | None = None, r
             git(tree, "add", "-A")
             git(tree, "commit", "-q", "-m", f"{handout['unit']} attempt {handout['attempt']}")
     return res
-
-
-@pytest.fixture
-def story(factory):
-    f = factory("story").init_git(STORY_GH)
-    return f
 
 
 def started(f):
@@ -178,11 +168,18 @@ def test_foreach_units_follow_after_and_claims(story):
     assert s["implement-T4"] == ("blocked", {"limit": "foreach max 2"}), "T3 is running and T2 is ready"
 
 
-def test_a_missing_or_broken_list_blocks_the_foreach(story):
-    do_spec(story, tasks="- {id: T1, title: A, repo: backend, files: [a]}\n- {title: no id}\n")
-    assert states(story.run("status", "412"))["foreach-tasks"][1] == {
-        "data": "tasks[1] has no usable 'id' (letters, digits, . _ -)"
-    }
+def test_a_list_without_usable_ids_blocks_the_foreach(factory):
+    f = factory("docs").init_git(DOCS_GH)
+    f.branch("home", "docs/docs-1", "main")
+    brief = handouts(f.run("next", "docs-1"))["brief"]
+    pages = json.dumps([{"slug": "intro", "file": "docs/intro.md"}, {"file": "docs/other.md"}])
+    files = {("home", "briefs/docs-1.md"): BRIEF, ("home", "work/docs-1/pages.json"): pages}
+    finish(f, "docs-1", brief, start_work(f, brief), files, {"summary": "Planned."})
+    f.merge("home", "docs/docs-1--brief", "docs/docs-1")
+    assert states(f.run("status", "docs-1"))["foreach-pages"] == (
+        "blocked",
+        {"data": "pages[1] has no usable 'slug' (letters, digits, . _ -)"},
+    )
 
 
 def test_invalid_dependencies_are_reported_not_guessed(factory):
@@ -236,6 +233,7 @@ def test_parallel_project_limit(story):
 # ---------------------------------------------------------------- docs: manual runs, gated blocks, commands
 
 DOCS_GH = {"user": "docs-user", "issues": {}}
+BRIEF = "# B\n\n## Intent\n\n## Findings\n\n## Outline\n"
 PAGES = json.dumps([{"slug": "intro", "heading": "Intro", "file": "docs/intro.md"}])
 
 

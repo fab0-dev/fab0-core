@@ -7,7 +7,7 @@ The `fab0` marketplace and core plugin. The product's home repo is `fab0-dev/fab
 fab0 is being refactored; [REFACTOR.md](https://github.com/fab0-dev/fab0/blob/main/REFACTOR.md) in the home repo is the plan, the tracker and the decision log, and it overrides this file where they disagree. Until its step R8:
 - don't release: no version bump, no tag, so auto-update can't hand projects a half-built core;
 - don't use `/fab0:run` here; work by hand, one refactor step per PR;
-- the engine reads schema 2 only. `validate`, `status`, `next`, `record` and `--version` work; `apply` (R3) and `inbox` (R4) are refused until built. Staleness and rework (R2c), gate decisions (R2d) and triggers (R2e) are still missing, so a run goes as far as its first auto gate;
+- the engine reads schema 2 only. `validate`, `status`, `next`, `record` and `--version` work; `apply` (R3) and `inbox` (R4) are refused until built. Gate decisions (R2d) and triggers (R2e) are still missing, so a run goes as far as its first auto gate;
 - the agents and skills in `plugins/fab0/` are still the 0.5 ones and no longer match the engine; R4 rewrites the skills and moves the agents out, and `scripts/check-agents.py` moves with them in R5.
 
 ## Layout
@@ -17,7 +17,7 @@ fab0 is being refactored; [REFACTOR.md](https://github.com/fab0-dev/fab0/blob/ma
   - it runs through `uv run --script`, with PEP 723 inline dependencies (`pyyaml`, `jsonschema`);
   - it lands on the Bash `PATH` when the plugin is enabled;
   - it puts `plugins/fab0/lib/` on `sys.path` and calls `fab0_engine.cli.main`.
-- `plugins/fab0/lib/fab0_engine/` is the engine, one module per concern: `wiring` (load and cross-check), `schedule` (units and their states), `handout` (hand-outs, briefs, `record`), `ledger`, `claims`, `git`, `tracker` (read-only facts), `templates`, `schemas`, `catalogue`, `merge`, `version`, `cli`. It finds the plugin's schemas and manifest relative to itself.
+- `plugins/fab0/lib/fab0_engine/` is the engine, one module per concern: `wiring` (load and cross-check), `schedule` (units and their states), `handout` (hand-outs, briefs, `record`), `artifacts` (reading, hashing and checking every kind), `hashing`, `ledger`, `claims`, `git`, `tracker` (read-only facts), `templates`, `schemas`, `catalogue`, `merge`, `version`, `cli`. It finds the plugin's schemas and manifest relative to itself.
 - `plugins/fab0/schemas/` holds the schema 2 JSON Schemas: `project`, `pipeline`, `step`, `artifact`, `verdict`, `return`, `ledger-entry` (and the 0.5 `tasks.json` until R4).
 - `plugins/fab0/agents/` and `plugins/fab0/skills/` are plain Claude Code agents and skills:
   - an agent describes its role and its output, and never names stages, pipelines or the agent that comes next;

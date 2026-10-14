@@ -28,6 +28,7 @@ from pathlib import Path
 
 import yaml
 
+from .artifacts import input_hashes
 from .claims import EVERYTHING, overlap
 from .git import Repo
 from .ledger import DEFAULT_PATH, attempts, entry_name, parse
@@ -62,6 +63,8 @@ class Unit:
     claims: dict = field(default_factory=dict)
     latest: dict | None = None
     attempt: int = 1
+    rework: dict | None = None  # why the next attempt is needed: stale inputs, missing outputs, failed checks
+    history: list = field(default_factory=list)  # every recorded attempt, oldest first
 
     @property
     def element_id(self) -> str | None:
@@ -270,8 +273,6 @@ class Run:
         art = self.w.artifacts[name]
         mapping = {k: k for k in ELEMENT_KEYS} | {k: v for k, v in art.get("elements", {}).items() if k != "at"}
         at = at or ([art["elements"]["at"]] if "at" in art.get("elements", {}) else [])
-        if art["kind"] != "file":
-            return [], {"data": f"{name}: reading a {art['kind']} list comes in step R2c"}
         data, problem = self.read_artifact(name, ctx)
         if problem:
             return [], problem
@@ -404,9 +405,6 @@ class Run:
 
     def artifact_condition(self, cond: dict, ctx: Ctx) -> tuple[bool | None, str | None]:
         name, *path = cond["artifact"].split(".")
-        art = self.w.artifacts[name]
-        if art["kind"] != "file":
-            return UNKNOWN, f"conditions on {art['kind']} artifacts come in step R2c"
         if "path" in cond:
             path = path + cond["path"].split(".")
         data, problem = self.read_artifact(name, ctx, parse="section" not in cond and "exists" not in cond)
@@ -585,14 +583,16 @@ class Run:
             unit.attempt = 1
             return
         unit.attempt = found[-1]
-        name = entry_name(unit.id, unit.attempt)
-        kind, where = names[name]
-        raw = (
-            (where / self.ledger_dir / name).read_bytes()
-            if kind == "worktree"
-            else repo.read_file(where, f"{self.ledger_dir}/{name}")
-        )
-        unit.latest = parse(raw, f"{repo.name}:{self.ledger_dir}/{name}")
+        for n in found:
+            name = entry_name(unit.id, n)
+            kind, where = names[name]
+            raw = (
+                (where / self.ledger_dir / name).read_bytes()
+                if kind == "worktree"
+                else repo.read_file(where, f"{self.ledger_dir}/{name}")
+            )
+            unit.history.append(parse(raw, f"{repo.name}:{self.ledger_dir}/{name}"))
+        unit.latest = unit.history[-1]
 
     def on_branch(self, unit: Unit, branch: str | None) -> bool:
         if not unit.latest:
@@ -610,6 +610,22 @@ class Run:
         self.load_latest(unit)
         entry = unit.latest
         if entry:
+            rework = self.rework(unit, entry)
+            if rework:
+                failing = 0
+                for past in reversed(unit.history):
+                    if not any(v != "pass" for v in past.get("verify", {}).values()):
+                        break
+                    failing += 1
+                limit = unit.gate.get("retry", 2) if isinstance(unit.gate, dict) and "auto" in unit.gate else 2
+                if set(rework) <= {"verify", "previous"} and failing > limit:
+                    unit.state, unit.reason = "blocked", {"failed": f"checks failed {failing} times"}
+                    return
+                unit.rework, unit.attempt = rework, unit.attempt + 1
+                running = (self.pending_dir() / f"{unit.id}.json").is_file()
+                unit.state = "running" if running else "ready"
+                unit.reason = {"rework": sorted(k for k in rework if k != "previous")}
+                return
             if self.on_branch(unit, unit.ctx.parent) and (self.ledger_branch is None or unit.gate == "none"):
                 unit.state, unit.reason = "done", None
             elif entry.get("exit", 0) != 0:
@@ -625,6 +641,36 @@ class Run:
             return
         running = (self.pending_dir() / f"{unit.id}.json").is_file()
         unit.state, unit.reason = ("running" if running else "ready"), None
+
+    def rework(self, unit: Unit, entry: dict) -> dict:
+        """Why the recorded attempt no longer stands: its checks failed, its inputs changed, or an output it
+        wrote is gone. A person's edit of an output isn't a reason: it is reviewed like the rest (D31)."""
+        why: dict = {}
+        failed = {k: v for k, v in entry.get("verify", {}).items() if v != "pass"}
+        if failed and not entry.get("questions"):  # an attempt that asks may not have written its outputs yet
+            why["verify"] = failed
+        now = input_hashes(self, unit)
+        before = entry.get("inputs", {})
+        stale = sorted(k for k in now.keys() | before.keys() if now.get(k) != before.get(k))
+        if stale:
+            why["stale"] = stale
+        missing = [n for n in entry.get("outputs", {}) if not self.output_exists(unit, n)]
+        if missing:
+            why["missing"] = missing
+        if why:
+            why["previous"] = entry.get("summary", "")
+        return why
+
+    def output_exists(self, unit: Unit, name: str) -> bool:
+        repo, path = self.artifact_location(name, unit.ctx)
+        tree = repo.worktrees().get(unit.branch) if unit.branch else None
+        if tree is not None:
+            return (tree / path).exists()
+        for branch in (unit.branch, self.parent_in(repo, unit.ctx.parent)):
+            ref = repo.fresh(branch) if branch else None
+            if ref:
+                return repo.read_file(ref, path) is not None or bool(repo.names(ref, path))
+        return False
 
     def missing_inputs(self, unit: Unit) -> dict | None:
         for name in unit.step.get("inputs", []):

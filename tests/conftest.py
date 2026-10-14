@@ -17,6 +17,11 @@ FACTORIES = sorted(p.name for p in FIXTURES.iterdir() if (p / ".fab0").is_dir())
 
 sys.path.insert(0, str(ROOT / "plugins" / "fab0" / "lib"))
 
+STORY_GH = {
+    "user": "po-user",
+    "issues": {"acme/shop#412": {"title": "Extend a booking", "body": "Guests extend a booking.", "type": "Story"}},
+}
+
 
 def git(path: Path, *args: str) -> str:
     run = subprocess.run(["git", "-C", str(path), *args], capture_output=True, text=True)
@@ -82,7 +87,8 @@ class Factory:
         (self.home / ".fab0" / rel).write_text(yaml.safe_dump(data, sort_keys=False))
 
     def run(self, *args: str, expect: int | None = 0) -> dict:
-        env = {**os.environ, "FAB0_GH_FAKE": str(self.gh_path)}
+        path = f"{Path(__file__).parent / 'bin'}{os.pathsep}{os.environ['PATH']}"  # stand-in linters
+        env = {**os.environ, "FAB0_GH_FAKE": str(self.gh_path), "PATH": path}
         result = subprocess.run(
             [sys.executable, str(SCRIPT), *args], cwd=self.home, capture_output=True, text=True, env=env
         )
@@ -95,3 +101,9 @@ class Factory:
 def factory(tmp_path):
     """factory("story") copies that fixture factory into a temporary directory."""
     return lambda name: Factory(name, tmp_path)
+
+
+@pytest.fixture
+def story(factory):
+    """The story fixture factory with git repositories, and its run 412 on a fake tracker."""
+    return factory("story").init_git(STORY_GH)

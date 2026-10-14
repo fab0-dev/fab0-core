@@ -31,3 +31,11 @@ def globs_overlap(a: str, b: str) -> bool:
 def overlap(a: dict[str, list[str]], b: dict[str, list[str]]) -> bool:
     """Claims are {repo: [globs]}; they overlap when two globs of one repository do."""
     return any(globs_overlap(x, y) for repo in a.keys() & b.keys() for x in a[repo] for y in b[repo])
+
+
+def covers(glob: str, path: str) -> bool:
+    """Whether a claimed glob covers one changed file."""
+    d = _dir(glob)
+    if d is not None:
+        return d == "" or path == d or path.startswith(d + "/")
+    return fnmatchcase(path, glob)

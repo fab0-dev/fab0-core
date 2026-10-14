@@ -1,0 +1,3 @@
+#!/bin/sh
+# A stand-in for the real linter in tests: a file that says LINT-FAIL fails.
+if grep -q LINT-FAIL "$1"; then echo "$1:1 MD000 the test asked this file to fail"; exit 1; fi
