@@ -125,3 +125,100 @@ def scope_diff(before: dict, after: dict) -> list[str]:
         if before["dirty"].get(path) != after["dirty"].get(path):
             changes.append(path)
     return changes
+
+
+class Writer:
+    """The few writes `apply` makes in a repository: merge one branch into another, commit a removal, create
+    a branch, push. Branches that aren't checked out are changed through plumbing, so nobody's checkout moves;
+    a branch that is checked out is changed in its checkout, and only when that checkout is clean."""
+
+    def __init__(self, repo: Repo):
+        self.repo = repo
+
+    def git(self, *args: str, cwd: Path | None = None, env: dict | None = None) -> subprocess.CompletedProcess:
+        import os
+
+        where = str(cwd or self.repo.path)
+        return subprocess.run(
+            ["git", "-C", where, *args], capture_output=True, text=True, env={**os.environ, **(env or {})}
+        )
+
+    def must(self, *args: str, cwd: Path | None = None, env: dict | None = None) -> str:
+        run = self.git(*args, cwd=cwd, env=env)
+        if run.returncode:
+            raise Fail(EXIT_ERROR, f"git {' '.join(args[:3])} failed in {self.repo.name}: {run.stderr.strip()}")
+        return run.stdout.strip()
+
+    def has_remote(self) -> bool:
+        return self.git("remote", "get-url", "origin").returncode == 0
+
+    def push(self, branch: str) -> None:
+        if self.has_remote():
+            self.must("push", "-q", "origin", f"refs/heads/{branch}:refs/heads/{branch}")
+
+    def checkout_of(self, branch: str) -> Path | None:
+        return self.repo.worktrees().get(branch)
+
+    def clean(self, tree: Path) -> bool:
+        return not self.git("status", "--porcelain", cwd=tree).stdout.strip()
+
+    def set_branch(self, branch: str, sha: str, message: str) -> None:
+        """Point `branch` at `sha`, which descends from its head: in its checkout if it has one."""
+        tree = self.checkout_of(branch)
+        if tree is None:
+            self.must("update-ref", "-m", message, f"refs/heads/{branch}", sha)
+        elif not self.clean(tree):
+            raise Fail(EXIT_ERROR, f"{branch} is checked out with changes in {tree}; commit or stash them first")
+        else:
+            self.must("merge", "-q", "--ff-only", sha, cwd=tree)
+
+    def create_branch(self, branch: str, start: str) -> None:
+        self.must("branch", branch, start)
+        self.push(branch)
+
+    def merge(self, head: str, into: str, message: str) -> dict:
+        """Merge `head` into the branch `into` with a merge commit. Returns {merged: sha}, {already: True}, or
+        {conflict: [files]} with nothing changed."""
+        repo = self.repo
+        base = repo.fresh(into)
+        head_ref = repo.fresh(head) or head
+        if base is None:
+            raise Fail(EXIT_ERROR, f"{repo.name}: no branch {into} to merge into")
+        if repo.is_ancestor(head_ref, base):
+            if base != into:  # the remote has it already; bring the local branch along
+                self.set_branch(into, repo.sha(base), "fab0: fast-forward")
+            return {"already": True}
+        run = self.git("merge-tree", "--write-tree", "--name-only", "--no-messages", base, head_ref)
+        if run.returncode == 1:
+            files = [line for line in run.stdout.splitlines()[1:] if line]
+            return {"conflict": files}
+        if run.returncode:
+            raise Fail(EXIT_ERROR, f"git merge-tree failed in {repo.name}: {run.stderr.strip()}")
+        tree = run.stdout.splitlines()[0]
+        sha = self.must("commit-tree", tree, "-p", repo.sha(base), "-p", repo.sha(head_ref), "-m", message)
+        self.set_branch(into, sha, message)
+        self.push(into)
+        repo._fresh.clear()
+        repo._trees.clear()
+        return {"merged": sha}
+
+    def commit(self, branch: str, message: str, remove: list[str] = (), allow_empty: bool = False) -> str | None:
+        """A commit on `branch` that removes `remove`, made in a scratch index; None if there was nothing to do."""
+        import tempfile
+
+        repo = self.repo
+        head = repo.fresh(branch)
+        with tempfile.TemporaryDirectory() as tmp:
+            env = {"GIT_INDEX_FILE": str(Path(tmp) / "index")}
+            self.must("read-tree", head, env=env)
+            if remove:
+                self.must("rm", "-r", "-q", "--cached", "--ignore-unmatch", "--", *remove, env=env)
+            tree = self.must("write-tree", env=env)
+        if tree == self.must("rev-parse", f"{head}^{{tree}}") and not allow_empty:
+            return None
+        sha = self.must("commit-tree", tree, "-p", repo.sha(head), "-m", message)
+        self.set_branch(branch, sha, message)
+        self.push(branch)
+        repo._fresh.clear()
+        repo._trees.clear()
+        return sha
