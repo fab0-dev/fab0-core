@@ -5,14 +5,15 @@ One call loops until nothing more can be done:
 - every unit whose gate allows it is merged into its parent: gate `none` directly (D28), `merge: auto` after
   approval, within `git.auto_merge` and once its pull request's required checks pass;
 - every unit a person must look at gets a pull request: a draft until its gate approves, then ready. A pull
-  request is never turned back into a draft (from #17), and questions and escalations are posted on it once.
+  request is never turned back into a draft (from #17), and questions and escalations are posted on it once;
+- with `tracker.fields.signal` set, the run's item and its elements' items show their state on the board.
 
 Each operation is idempotent: its check comes first, so running `apply` twice changes nothing the second time.
 """
 
 from __future__ import annotations
 
-from .actions import check, child_titles, written
+from .actions import check, child_titles, element_items, written
 from .errors import EXIT_ERROR, Fail
 from .git import Writer
 from .schedule import Run, Unit
@@ -26,16 +27,7 @@ def perform(run: Run, unit: Unit) -> str:
     name, args = unit.step["action"], unit.step.get("with", {})
     gh, home = run.tracker, run.home.github
     if name == "tracker.child.sync":
-        have = {(c["title"], c["type"]) for c in gh.sub_issues(home, int(run.run))}
-        made = []
-        for element, title in child_titles(run, args, unit.ctx, unit.elements or []):
-            if (title, args.get("type")) in have or (not args.get("type") and title in {t for t, _ in have}):
-                continue
-            body = f"{element['id']} of run {run.run} ({run.name})."
-            child = gh.create_issue(home, title, body, args.get("type"))
-            gh.add_sub_issue(home, int(run.run), child)
-            made.append(f"#{child['number']}")
-        return f"created {', '.join(made)}"
+        return sync_children(run, unit, args)
     args = render(args, run.lookup(unit.ctx))
     if name == "git.run-branch":
         made = []
@@ -105,6 +97,33 @@ def perform(run: Run, unit: Unit) -> str:
             gh.set_field(home, number, tracker.get("owner"), tracker.get("project"), field, value)
         return "set " + ", ".join(f"{k} to {v}" for k, v in field_names(run, args).items())
     raise Fail(EXIT_ERROR, f"apply can't perform {name}")
+
+
+def sync_children(run: Run, unit: Unit, args: dict) -> str:
+    """A sub-issue of the run's item for every element that has none, then each new item's `after` as
+    blocked-by relations, both ways. Relations between items that already existed are left alone: from their
+    creation, the tracker is the truth (D49)."""
+    gh, home = run.tracker, run.home.github
+    elements = unit.elements or []
+    items = element_items(run, args, unit.ctx, elements)
+    made = []
+    for element, title in child_titles(run, args, unit.ctx, elements):
+        if element["id"] in items:
+            continue
+        body = f"{element['id']} of run {run.run} ({run.name})."
+        child = gh.create_issue(home, title, body, args.get("type"))
+        gh.add_sub_issue(home, int(run.run), child)
+        items[element["id"]] = {"repo": home, "number": child["number"]}
+        made.append(element["id"])
+    linked = []
+    for element in elements:
+        for dep in element["after"]:
+            if dep in items and (element["id"] in made or dep in made):
+                blocked, blocker = items[element["id"]], items[dep]
+                gh.add_blocked_by(blocked["repo"], blocked["number"], blocker["repo"], blocker["number"])
+                linked.append(f"#{blocked['number']} after #{blocker['number']}")
+    did = f"created {', '.join('#' + str(items[i]['number']) for i in made)}"
+    return did + (f"; {', '.join(linked)}" if linked else "")
 
 
 def run_pulls(run: Run, draft: bool, only_home: bool) -> str:
@@ -239,6 +258,45 @@ def unit_pull(run: Run, unit: Unit) -> list[str]:
     return done
 
 
+def describe(unit: Unit) -> str:
+    """One line for the board: a unit's state, and why."""
+    parts = []
+    for key, value in (unit.reason or {}).items():
+        if isinstance(value, list):
+            value = ", ".join(map(str, value))
+        elif isinstance(value, dict):
+            value = ", ".join(f"{k} {v}" for k, v in value.items())
+        parts.append(f"{key} {value}")
+    return f"{unit.state}: {unit.id}" + (f" ({'; '.join(parts)})" if parts else "")
+
+
+def signals(run: Run, result: dict) -> list[tuple[str, str]]:
+    """Set the signal field of the run's item and of each element's item to where it is, if it changed:
+    `done`, or the first of its units that isn't. Projected, never read back (P3)."""
+    tracker = run.w.project.get("tracker", {})
+    field = tracker.get("fields", {}).get("signal")
+    if not field or run.item() is None:
+        return []
+    groups: dict[str, list[Unit]] = {run.item_ref(): run.units}
+    for unit in run.units:
+        item = (unit.ctx.element or {}).get("item")
+        if item:
+            groups.setdefault(item, []).append(unit)
+    changed = []
+    for ref, units in groups.items():
+        left = [u for u in units if u.state != "done"]
+        if ref == run.item_ref() and result["kind"] != "units":
+            text = "done" if result["kind"] == "done" else "waiting: the run's pull requests"
+        else:
+            text = describe(left[0]) if left else "done"
+        repo, number = ref.split("#")
+        have = run.tracker.fields(repo, int(number), tracker.get("owner"), tracker.get("project"))
+        if have.get(field) != text:
+            run.tracker.set_field(repo, int(number), tracker.get("owner"), tracker.get("project"), field, text)
+            changed.append((ref, text))
+    return changed
+
+
 def apply(run: Run, only: str | None = None) -> dict:
     applied: list[dict] = []
     for _ in range(ROUNDS):
@@ -271,6 +329,7 @@ def apply(run: Run, only: str | None = None) -> dict:
                 for did in unit_pull(run, unit):
                     applied.append({"unit": unit.id, "pull": did})
         if not progress:
+            applied += [{"item": ref, "signal": text} for ref, text in signals(run, result)]
             return {**result, "applied": applied}
         run = Run(run.w, run.name, run.run, run.actor, run.tracker)  # read everything again
     raise Fail(EXIT_ERROR, f"apply didn't settle after {ROUNDS} rounds", applied=applied)

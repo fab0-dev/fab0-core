@@ -4,8 +4,9 @@ Reads serve the engine; writes serve only `apply`. Set FAB0_GH_FAKE=<file.json> 
 in a JSON file instead of GitHub (used by the tests):
 
     {"user": "...",
-     "issues": {"owner/repo#7": {"title", "body", "labels": [...], "type", "state", "assignees": [...],
-                                 "comments": [...], "sub_issues": ["owner/repo#8"], "fields": {"Stage": "spec"}}},
+     "issues": {"owner/repo#7": {"title", "body", "labels": [...], "type", "state", "state_reason",
+                                 "assignees": [...], "comments": [...], "sub_issues": ["owner/repo#8"],
+                                 "blocked_by": ["owner/repo#6"], "fields": {"Stage": "spec"}}},
      "pulls": {"owner/repo": [{"number", "branch", "base", "state", "draft", "body", "diff",
                                "reviews": [...], "comments": [...]}]}}
 
@@ -52,6 +53,7 @@ def _issue(d: dict, number: int) -> dict:
         "labels": d.get("labels", []),
         "type": d.get("type"),
         "state": d.get("state", "open"),
+        "state_reason": d.get("state_reason"),
         "assignees": d.get("assignees", []),
     }
 
@@ -77,9 +79,15 @@ class GhCli:
             "labels": [label["name"] for label in d.get("labels") or []],
             "type": (d.get("type") or {}).get("name"),
             "state": d["state"],
+            "state_reason": d.get("state_reason"),
             "assignees": [a["login"] for a in d.get("assignees") or []],
         }
         return _issue(fields, d["number"])
+
+    @staticmethod
+    def _repo_of(d: dict, default: str) -> str:
+        url = d.get("repository_url") or ""
+        return url.split("/repos/", 1)[1] if "/repos/" in url else default
 
     def issue(self, repo: str, number: int) -> dict:
         return self._from_api(self._api(f"repos/{repo}/issues/{number}"))
@@ -87,8 +95,13 @@ class GhCli:
     def sub_issues(self, repo: str, number: int) -> list[dict]:
         found = []
         for d in self._api(f"repos/{repo}/issues/{number}/sub_issues?per_page=100"):
-            found.append({**self._from_api(d), "repo": d["repository_url"].split("/repos/", 1)[1]})
+            found.append({**self._from_api(d), "repo": self._repo_of(d, repo)})
         return found
+
+    def blocked_by(self, repo: str, number: int) -> list[dict]:
+        """The items this one is blocked by, in any repository and any state."""
+        data = self._api(f"repos/{repo}/issues/{number}/dependencies/blocked_by?per_page=100")
+        return [{**self._from_api(d), "repo": self._repo_of(d, repo)} for d in data]
 
     def fields(self, repo: str, number: int, owner: str, project: int) -> dict:
         """The item's field values on one project board, by field name."""
@@ -160,6 +173,10 @@ class GhCli:
 
     def issue_id(self, repo: str, number: int) -> int:
         return self._api(f"repos/{repo}/issues/{number}")["id"]
+
+    def add_blocked_by(self, repo: str, number: int, blocker_repo: str, blocker: int) -> None:
+        issue_id = self.issue_id(blocker_repo, blocker)
+        self._gh("api", f"repos/{repo}/issues/{number}/dependencies/blocked_by", "-F", f"issue_id={issue_id}")
 
     def edit_labels(self, repo: str, number: int, add: list, remove: list) -> None:
         args = ["issue", "edit", str(number), "--repo", repo]
@@ -233,6 +250,13 @@ class GhFake:
             found.append({**self.issue(r, int(n)), "repo": r})
         return found
 
+    def blocked_by(self, repo: str, number: int) -> list[dict]:
+        found = []
+        for ref in self._raw(repo, number).get("blocked_by", []):
+            r, n = ref.split("#")
+            found.append({**self.issue(r, int(n)), "repo": r})
+        return found
+
     def fields(self, repo: str, number: int, owner: str, project: int) -> dict:
         return self._raw(repo, number).get("fields", {})
 
@@ -287,6 +311,12 @@ class GhFake:
 
     def issue_id(self, repo: str, number: int) -> int:
         return number
+
+    def add_blocked_by(self, repo: str, number: int, blocker_repo: str, blocker: int) -> None:
+        blocked_by = self._raw(repo, number).setdefault("blocked_by", [])
+        if f"{blocker_repo}#{blocker}" not in blocked_by:
+            blocked_by.append(f"{blocker_repo}#{blocker}")
+        self.save()
 
     def edit_labels(self, repo: str, number: int, add: list, remove: list) -> None:
         d = self._raw(repo, number)

@@ -122,15 +122,23 @@ def child_titles(run, args: dict, ctx, elements: list) -> list[tuple[dict, str]]
     return out
 
 
-def check_children(run, args: dict, ctx, elements: list) -> str | None:
-    """Every element has a sub-issue of the run's item with its title (and type, if given)."""
-    item = run.item()
-    if item is None:
-        return "the run has no tracker item"
-    children = run.tracker.sub_issues(run.home.github, int(run.run))
-    missing = []
+def element_items(run, args: dict, ctx, elements: list, children: list | None = None) -> dict[str, dict]:
+    """Each element's tracker item: the sub-issue of the run's item with its title (and type, if given), as
+    `tracker.child.sync` makes them."""
+    if children is None:
+        children = run.tracker.sub_issues(run.home.github, int(run.run))
+    found = {}
     for element, title in child_titles(run, args, ctx, elements):
-        found = [c for c in children if c["title"] == title and (not args.get("type") or c["type"] == args["type"])]
-        if not found:
-            missing.append(element["id"])
+        match = [c for c in children if c["title"] == title and (not args.get("type") or c["type"] == args["type"])]
+        if match:
+            found[element["id"]] = match[0]
+    return found
+
+
+def check_children(run, args: dict, ctx, elements: list) -> str | None:
+    """Every element has a sub-issue of the run's item."""
+    if run.item() is None:
+        return "the run has no tracker item"
+    items = element_items(run, args, ctx, elements)
+    missing = [e["id"] for e in elements if e["id"] not in items]
     return f"no sub-issue for {', '.join(missing)}" if missing else None
