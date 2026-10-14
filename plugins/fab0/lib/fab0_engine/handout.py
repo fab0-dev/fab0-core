@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import copy
 import json
+import subprocess
 from pathlib import Path
 
 from .artifacts import content_hash, input_hashes, read_disk, verify, view
@@ -67,8 +68,12 @@ def branches(run: Run, unit: Unit) -> list[dict]:
                 break
             branch, parent = parent, run.branch_parents.get(parent)
         chain[0]["worktree"] = worktree(run, name, unit.branch, unit.id)
-        if chain[0]["exists"] and unit.attempt > 1:
-            chain[0]["sync"] = True
+        head, base = repo.fresh(unit.branch), repo.fresh(chain[0]["from"])
+        if head and base and not repo.is_ancestor(base, head):
+            chain[0]["sync"] = True  # merge `from` in first; `conflicts` lists what the merge leaves to resolve
+            conflicts = repo.merge_conflicts(head, base)
+            if conflicts:
+                chain[0]["conflicts"] = conflicts
         out.extend(reversed(chain))
     return out
 
@@ -91,6 +96,14 @@ def rework_lines(unit: Unit) -> list[str]:
     for name, errors in why.get("verify", {}).items():
         lines.append(f"- {name} failed its checks:")
         lines += [f"  - {e}" for e in errors]
+    for repo, files in why.get("conflict", {}).items():
+        lines.append(f"- Your branch conflicts with the branch it merges into, in {repo}: " + ", ".join(files) + ".")
+        lines.append(
+            "  The session merged that branch into yours, so these files hold conflict markers. Resolve each "
+            "one so both sides' intent survives, and remove the markers."
+        )
+    for pr, names in why.get("checks", {}).items():
+        lines.append(f"- The required checks of {pr} fail: " + (", ".join(names) or "see the pull request") + ".")
     rejected = why.get("rejected")
     if rejected is not None:
         lines.append("- The gate rejected it:")
@@ -223,6 +236,41 @@ def handout(run: Run, unit: Unit) -> dict:
     return out
 
 
+def claim(run: Run, unit: Unit) -> bool:
+    """Claim a unit that starts now by creating its branch, on the remote first (D46). False: someone else has."""
+    from .git import Writer
+
+    if run.ledger_branch or unit.state != "ready":
+        return True
+    for name in dict.fromkeys(unit.write or [unit.ledger_repo]):
+        repo = run.repos[name]
+        parent = repo.fresh(run.parent_in(repo, unit.ctx.parent))
+        if repo.fresh(unit.branch) or parent is None:
+            continue  # a rework's branch is the unit's already; a parent that doesn't exist yet is the session's
+        if not Writer(repo).claim(unit.branch, repo.sha(parent), run.actor or "fab0"):
+            return False
+    return True
+
+
+def workspace_root(run: Run) -> Path:
+    import os
+
+    return Path(os.path.commonpath([str(r.path.parent) for r in run.repos.values()]))
+
+
+def outside_state(run: Run) -> dict[str, int]:
+    """What sits beside the repositories in the workspace, and when each last changed. An agent that writes
+    outside every repository usually writes there (from #20); writes anywhere else can't be seen."""
+    repos = {r.path for r in run.repos.values()}
+    root = workspace_root(run)
+    state = {}
+    for entry in root.iterdir() if root.is_dir() else []:
+        if entry.resolve() in repos:
+            continue
+        state[entry.name] = entry.stat().st_mtime_ns
+    return state
+
+
 def save_pending(run: Run, unit: Unit, out: dict) -> None:
     """Keep the hand-out until `record`: the inputs' hashes, the commit each repository starts from, and the
     state of every repository the unit may not write, so changes there are seen."""
@@ -244,8 +292,10 @@ def save_pending(run: Run, unit: Unit, out: dict) -> None:
         "starts": starts,
         "inputs": input_hashes(run, unit),
         "scope": {n: run.repos[n].scope_state() for n in others},
+        "outside": outside_state(run),
         "ledger_dir": run.ledger_dir,
         "outputs": unit.step.get("outputs", []),
+        "rework": sorted(k for k in (unit.rework or {}) if k != "previous"),
     }
     pending.pop("brief", None)
     (folder / f"{unit.id}.json").write_text(json.dumps(pending, indent=2))
@@ -267,7 +317,16 @@ def check_writes(run: Run, unit: Unit, pending: dict, trees: dict) -> dict[str, 
         start = pending["starts"].get(name)
         if not start:
             continue
-        files = run.repos[name].changed_since(tree, start["sha"])
+        # changes since the branch last took its parent in: a synced branch's merge brings others' work along
+        repo = run.repos[name]
+        parent = repo.fresh(start["branch"])
+        since = start["sha"]
+        if parent:
+            found = subprocess.run(
+                ["git", "-C", str(tree), "merge-base", "HEAD", parent], capture_output=True, text=True
+            )
+            since = found.stdout.strip() or since
+        files = repo.changed_since(tree, since)
         globs = pending["claims"].get(name, [])
         outside = [f for f in files if not f.startswith(run.ledger_dir + "/") and not any(covers(g, f) for g in globs)]
         if outside:
@@ -306,6 +365,8 @@ def record(run: Run, unit_id: str, returned: dict | None, exit_code: int | None)
     entry["base"] = start
     if pending["inputs"]:
         entry["inputs"] = pending["inputs"]
+    if pending.get("rework"):
+        entry["rework"] = pending["rework"]
     if pending["claims"]:
         entry["claims"] = [f"{repo}:{g}" for repo, globs in pending["claims"].items() for g in globs]
     gate = pending["gate"]
@@ -363,6 +424,8 @@ def record(run: Run, unit_id: str, returned: dict | None, exit_code: int | None)
     target.write_text(dump_entry(entry))
     path.unlink()
     failed = sorted(k for k, v in checks.items() if v != "pass")
+    before, now = pending.get("outside", {}), outside_state(run)
+    outside = sorted(n for n in now.keys() | before.keys() if now.get(n) != before.get(n))
     return {
         "ok": True,
         "unit": unit_id,
@@ -371,4 +434,5 @@ def record(run: Run, unit_id: str, returned: dict | None, exit_code: int | None)
         "verified": not failed,
         "failed": failed,
         "recorded": entry,
+        **({"outside": [str(workspace_root(run) / n) for n in outside]} if outside else {}),
     }

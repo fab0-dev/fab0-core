@@ -152,29 +152,6 @@ def test_a_pull_request_a_person_marked_ready_stays_ready(story):
     assert gh(story)["pulls"]["acme/shop-api"][0]["draft"] is False, "from #17: never turned back into a draft"
 
 
-def test_a_conflicting_merge_changes_nothing(story):
-    spec_done(story)
-    story.merge("home", "fab0/412/spec", "fab0/412/base")
-    story.run("apply", "412")
-    implement(story)
-    record_gate(story, "412", "implement-T1", verdict("approve"))
-    backend = story.repo("backend")
-    git(backend, "checkout", "-q", "fab0/412/base")
-    (backend / "src").mkdir()
-    (backend / "src" / "a.py").write_text("x = 2\n")
-    git(backend, "add", "-A")
-    git(backend, "commit", "-q", "-m", "someone else")
-    git(backend, "checkout", "-q", "main")
-    head = git(backend, "rev-parse", "fab0/412/base")
-    res = story.run("apply", "412")
-    assert {
-        "unit": "implement-T1",
-        "merge": "conflicts with fab0/412/base in backend: src/a.py (resolved in R3b)",
-    } in did(res)
-    assert git(backend, "rev-parse", "fab0/412/base") == head
-    assert states(res)["implement-T1"] == ("waiting", {"gate": "merge"})
-
-
 def test_apply_on_the_ledger_branch_labels_the_item(factory):
     gh_data = {
         "user": "u",

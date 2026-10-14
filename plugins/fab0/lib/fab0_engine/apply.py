@@ -149,6 +149,22 @@ def repos_of(run: Run, unit: Unit) -> list[str]:
     return [name for name, repo in run.repos.items() if repo.exists() and repo.fresh(unit.branch)]
 
 
+def sync(run: Run, unit: Unit, name: str) -> str | None:
+    """Bring a reworked unit's branch up to date with its parent, when that merges cleanly and its checkout,
+    if any, is clean; otherwise the session merges and the agent resolves (D45)."""
+    repo = run.repos[name]
+    parent = run.parent_in(repo, unit.ctx.parent)
+    head, base = repo.fresh(unit.branch), repo.fresh(parent)
+    if not head or not base or repo.is_ancestor(base, head) or repo.merge_conflicts(head, base):
+        return None
+    writer = Writer(repo)
+    tree = writer.checkout_of(unit.branch)
+    if tree is not None and not writer.clean(tree):
+        return None
+    writer.merge(parent, unit.branch, f"fab0: bring {parent} into {unit.id}")
+    return f"merged {parent} into {unit.branch} in {name}"
+
+
 def merge_unit(run: Run, unit: Unit) -> str | None:
     """Merge a unit's branch into its parent in every repository it worked in, within the merge policy."""
     auto = unit.auto is not None and unit.gate.get("merge") == "auto"
@@ -166,12 +182,12 @@ def merge_unit(run: Run, unit: Unit) -> str | None:
         parent = run.parent_in(repo, unit.ctx.parent)
         if auto:
             pr = run.tracker.pull(repo.github, unit.branch, parent)
-            if pr is not None and run.tracker.checks(repo.github, pr["number"]) != "pass":
+            if pr is not None and run.tracker.checks(repo.github, pr["number"])[0] != "pass":
                 return f"waiting for {repo.github}#{pr['number']}'s required checks"
         Writer(repo).push(unit.branch)
         result = Writer(repo).merge(unit.branch, parent, f"fab0: merge {unit.id} (run {run.run})")
         if "conflict" in result:
-            return f"conflicts with {parent} in {name}: {', '.join(result['conflict'])} (resolved in R3b)"
+            return f"conflicts with {parent} in {name}: {', '.join(result['conflict'])}"
         merged.append(f"{name}:{parent}")
         if hasattr(run.tracker, "note_merged"):
             run.tracker.note_merged(repo.github, unit.branch, parent)
@@ -232,6 +248,11 @@ def apply(run: Run, only: str | None = None) -> dict:
             if only and unit.id != only:
                 continue
             reason = unit.reason or {}
+            if unit.state == "ready" and unit.rework and unit.branch:
+                for name in repos_of(run, unit):
+                    synced = sync(run, unit, name)
+                    if synced:
+                        applied.append({"unit": unit.id, "sync": synced})
             if unit.step and "action" in unit.step and unit.state == "ready":
                 missing = check(run, unit.step["action"], unit.step.get("with", {}), unit.ctx, unit.elements)
                 if missing is not None:
