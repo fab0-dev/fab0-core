@@ -253,7 +253,7 @@ def test_a_profile_is_applied(factory):
     assert res["errors"] == [{"file": ".fab0/fab0.yaml", "message": "no profile 'dear'"}]
 
 
-@pytest.mark.parametrize("command", ["apply", "inbox"])
+@pytest.mark.parametrize("command", ["inbox"])
 def test_run_commands_are_refused_until_built(factory, command):
     res = factory("story").run(command, "412", expect=4)
     assert "not built yet in schema 2" in res["error"]

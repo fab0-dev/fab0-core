@@ -6,7 +6,9 @@
   record RUN UNIT       check a unit's result, or with --gate its gate's, and write the ledger entry
   --version             the fab0 release of this engine
 
-`apply` comes in step R3 and `inbox` in R4 of the refactor.
+  apply RUN             perform what is due: actions, merges, pull requests (writes git and the tracker)
+
+`inbox` comes in step R4 of the refactor.
 
 Exit codes: 0 ok, 1 error, 2 usage, 3 invalid wiring, 4 refused.
 """
@@ -19,6 +21,7 @@ import re
 import subprocess
 from pathlib import Path
 
+from .apply import apply as apply_run
 from .errors import EXIT_ERROR, EXIT_INVALID, EXIT_OK, EXIT_REFUSED, EXIT_USAGE, Fail
 from .gates import gate_handout, record_gate, save_gate_pending
 from .handout import action_handout, handout, record, save_pending
@@ -27,7 +30,7 @@ from .tracker import make_tracker
 from .version import read_version
 from .wiring import Wiring
 
-NOT_YET = {"apply": "R3", "inbox": "R4"}
+NOT_YET = {"inbox": "R4"}
 RUN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 
@@ -188,6 +191,10 @@ def cmd_record(args) -> dict:
     return record(run, args.unit, returned, args.exit)
 
 
+def cmd_apply(args) -> dict:
+    return apply_run(load_run(args), args.unit)
+
+
 def cmd_not_yet(args) -> dict:
     raise Fail(
         EXIT_REFUSED,
@@ -218,6 +225,9 @@ def main(argv: list[str] | None = None) -> int:
     p = run_parser("next", "the run's units, and a hand-out for each one that is ready")
     p.add_argument("--unit", help="hand out only this unit")
     p.set_defaults(handler=cmd_next)
+    p = run_parser("apply", "perform the run's due actions, merges and pull requests")
+    p.add_argument("--unit", help="only this unit")
+    p.set_defaults(handler=cmd_apply)
     p = run_parser("record", "check a handed-out unit's result and write its ledger entry")
     p.add_argument("unit", help="the unit, as next named it")
     p.add_argument("--return", dest="return_file", help="a file with the agent's or tool's JSON return")
