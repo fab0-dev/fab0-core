@@ -68,6 +68,10 @@ def perform(run: Run, unit: Unit) -> str:
             run, draft=bool(args.get("draft")) if name == "pr.open-run" else False, only_home=name == "pr.open-run"
         )
     if name == "pr.merge":
+        from .wiring import base_allowed
+
+        if not base_allowed(run.policy):  # validate refuses it too; this is the engine's own check
+            raise Fail(EXIT_ERROR, "pr.merge: git.auto_merge doesn't allow merging into the base branch")
         for repo in written(run):
             result = Writer(repo).merge(run.run_branch, repo.base, f"fab0: run {run.run} ({run.name})")
             if "conflict" in result:

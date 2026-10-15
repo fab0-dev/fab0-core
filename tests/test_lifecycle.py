@@ -166,3 +166,12 @@ def test_onstart_isnt_redone_once_the_run_has_records(factory):
     res = f.run("apply", "7")
     assert actions(res)["onStart-1"] == ("tracker.label", "done", None)
     assert not any(a["unit"] == "onStart-1" for a in res["applied"]), "from the e2e check: no tug of war with onEnd"
+
+
+def test_pr_merge_needs_the_base_allowed(factory):
+    """From R7: merging the run into the base branch is a person's, unless the policy says otherwise."""
+    f = factory("story")
+    f.edit("pipelines/story.yaml", lambda d: d["onEnd"].append("pr.merge"))
+    assert "pr.merge merges into the base branch, which git.auto_merge doesn't allow" in messages(f)
+    f.edit("fab0.yaml", lambda d: d["git"].update(auto_merge={"into": ["run", "base"], "allow_base": True}))
+    assert f.run("validate")["ok"]
