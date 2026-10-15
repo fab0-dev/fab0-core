@@ -2,9 +2,7 @@
 
 The `fab0` plugin marketplace and the core `fab0` plugin for Claude Code.
 
-fab0 is a toolkit for building and operating software factories. A factory is one or more YAML pipelines in a project's `.fab0/` directory: steps run by any agent, command or tool, with a gate on every transition, carried on git and GitHub. The project's home repo is [`fab0-dev/fab0`](https://github.com/fab0-dev/fab0).
-
-> **Refactor in progress.** fab0 is being rebuilt from a delivery factory into a toolkit for building factories. This plugin is frozen at 0.5.0, and no release is made until the refactor's last step. The plan and progress are in [REFACTOR.md](https://github.com/fab0-dev/fab0/blob/main/REFACTOR.md).
+fab0 is a toolkit for building and operating software factories. A factory is one or more YAML pipelines in a project's `.fab0/` directory: steps run by any agent, command or tool, with a gate on every transition, carried on git and GitHub. The project's home repo is [`fab0-dev/fab0`](https://github.com/fab0-dev/fab0). The user documentation is in [`fab0-dev/docs`](https://github.com/fab0-dev/docs/blob/main/docs/index.md).
 
 ## Contents
 

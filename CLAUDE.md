@@ -2,14 +2,6 @@
 
 The `fab0` marketplace and core plugin. The product's home repo is `fab0-dev/fab0`, a sibling checkout; its `CLAUDE.md` holds the working rules and principles that apply here too.
 
-## Refactor mode
-
-fab0 is being refactored; [REFACTOR.md](https://github.com/fab0-dev/fab0/blob/main/REFACTOR.md) in the home repo is the plan, the tracker and the decision log, and it overrides this file where they disagree. Until its step R8:
-- don't release: no version bump, no tag, so auto-update can't hand projects a half-built core;
-- don't use `/fab0:run` here; work by hand, one refactor step per PR;
-- the engine reads schema 2 only, and every command works;
-- the delivery agents, `spec-format` and `tasks.json` left in R4; the `story` example in the examples repo takes them up in R5.
-
 ## Layout
 
 - `plugins/fab0/` is what users install. Keep it free of tests and development files.
@@ -26,7 +18,7 @@ fab0 is being refactored; [REFACTOR.md](https://github.com/fab0-dev/fab0/blob/ma
 ## Conventions
 
 - Python 3.12+, standard library plus `pyyaml` and `jsonschema`. No other runtime dependency.
-- The engine is deterministic. Only `apply` writes to git refs and the tracker (D5 in REFACTOR.md); `record` writes only ledger files in a unit's checkout, and `next` only creates a unit's branch when it claims the unit. `apply` changes branches through plumbing, or in their checkout only when it is clean, so nobody's work moves.
+- The engine is deterministic. Only `apply` writes to git refs and the tracker (D5 in the home repo's `DECISIONS.md`); `record` writes only ledger files in a unit's checkout, and `next` only creates a unit's branch when it claims the unit. `apply` changes branches through plumbing, or in their checkout only when it is clean, so nobody's work moves.
 - Every command prints one JSON object. Exit codes: 0 ok, 1 error, 2 usage, 3 invalid wiring, 4 refused.
 - Ids and ledger names are never zero-padded.
 - Schemas are JSON Schema 2020-12.
