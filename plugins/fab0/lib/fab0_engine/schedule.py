@@ -42,7 +42,7 @@ from .git import Repo
 from .hashing import sha_json
 from .ledger import DEFAULT_PATH, attempts, entry_name, gate_attempts, parse
 from .templates import Unresolved
-from .wiring import EXECUTORS, Wiring
+from .wiring import EXECUTORS, Wiring, base_allowed
 
 ELEMENT_KEYS = ("id", "title", "repo", "after", "paths")
 ELEMENT_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
@@ -904,6 +904,8 @@ class Run:
             if unit.gate == "none" or labelled or (auto is not None and unit.gate.get("merge") == "auto")
             else "human"
         )
+        if merge == "merge" and unit.ctx.parent is None and not base_allowed(self.policy):
+            merge = "human"  # into the base branch, only a person merges unless the policy allows it (from R8)
         if self.merge_trouble(unit, entry, merge):
             return
         unit.state, unit.reason = "waiting", {"gate": merge}
