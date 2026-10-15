@@ -2,6 +2,7 @@
 nothing the second time."""
 
 import json
+import subprocess
 
 from conftest import git
 from test_gates import record_gate, verdict
@@ -219,3 +220,24 @@ def test_a_label_decides_and_apply_merges(story):
     story.gh_edit(lambda d: d["issues"]["acme/shop#412"].setdefault("labels", []).append("spec-ok"))
     res = story.run("apply", "412")
     assert {"unit": "spec", "merge": "merged into home:fab0/412/base"} in did(res)
+
+
+def test_the_base_isnt_merged_into_a_run_branch_without_work(story):
+    """From R8: git.sync-base merged main into every run branch, so a repository the run never wrote got an
+    empty merge commit, and pr.ready opened an empty pull request there."""
+    home_task = "- {id: T1, title: Help page, repo: home, files: [help/booking.md]}\n"
+    spec_done(story, tasks=home_task)
+    story.merge("home", "fab0/412/spec", "fab0/412/base")
+    story.run("apply", "412")
+    h = handouts(story.run("next", "412", "--unit", "implement-T1"))["implement-T1"]
+    finish(story, "412", h, start_work(story, h), {("home", "help/booking.md"): "x\n"}, {"summary": "Done."})
+    for repo in ("home", "backend"):  # both bases move; only home's run branch has work to bring it into
+        story.write(repo, "NEWS.md", "moved on\n")
+        story.commit(repo, "main moves on")
+    record_gate(story, "412", "implement-T1", verdict("approve"))
+    res = story.run("apply", "412")
+    assert actions(res)["onEnd-1"][1] == "done"
+    backend = story.repo("backend")
+    behind = subprocess.run(["git", "-C", str(backend), "merge-base", "--is-ancestor", "fab0/412/base", "main"])
+    assert behind.returncode == 0, "the run branch got no merge commit"
+    assert not gh(story)["pulls"].get("acme/shop-api"), "no pull request for a repository without work"
