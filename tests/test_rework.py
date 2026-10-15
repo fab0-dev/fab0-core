@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 
 from conftest import SCRIPT, git, start_docs
+from fab0_engine.hashing import sha_json
 from test_run import (
     BRIEF,
     DOCS_GH,
@@ -178,6 +179,23 @@ def test_a_fab0_comment_does_not_count(story):
     assert states(story.run("status", "412"))["implement-T1"] == ("waiting", {"gate": "gate"})
 
 
+def test_the_brief_says_no_reviews_when_the_only_comment_is_fab0s(story):
+    story.edit("steps/spec.yaml", lambda d: d.update(inputs=["intent", "reviews"]))
+    started(story)
+    data = gh(story)
+    data["pulls"]["acme/shop"] += [
+        {
+            "number": 5,
+            "branch": "fab0/412/spec",
+            "base": "fab0/412/base",
+            "comments": [{"id": 1, "user": "me", "body": "<!-- fab0:questions -->\nWhich hotel?"}],
+        }
+    ]
+    set_gh(story, data)
+    brief = handouts(story.run("next", "412"))["spec"]["brief"]
+    assert "No reviews ask for changes." in brief and "Which hotel?" not in brief
+
+
 def test_a_comment_on_a_merged_pull_request_does_not_rework_the_unit(story):
     do_spec(story, tasks=ONE_TASK)
     implement_t1(story)
@@ -211,9 +229,49 @@ def test_comments_of_an_earlier_merged_pull_request_stay_in_the_brief(story):
 
 def test_reviews_without_comments_hash_as_before(story):
     do_spec(story, tasks=ONE_TASK)
+    old = [
+        {"state": "COMMENTED", "user": "a", "body": "Hm."},
+        {"state": "CHANGES_REQUESTED", "user": "b", "body": "No."},
+    ]
+    data = gh(story)
+    data["pulls"]["acme/shop-api"] = [
+        {
+            "number": 9,
+            "branch": "fab0/412/implement-T1",
+            "base": "fab0/412/base",
+            "reviews": [dict(r, id=n) for n, r in enumerate(old, 1)],
+        }
+    ]
+    set_gh(story, data)
+    rec = handouts(story.run("next", "412"))["implement-T1"]
+    res = finish(story, "412", rec, start_work(story, rec), {("backend", "src/a.py"): "x = 1\n"}, {"summary": "D"})
+    assert res["recorded"]["inputs"]["reviews"] == sha_json(old)
+
+
+def test_reviews_and_comments_of_all_pull_requests_are_ordered_by_time(story):
+    do_spec(story, tasks=ONE_TASK)
     implement_t1(story)
-    _pull_with(story, reviews=[{"id": 1, "state": "APPROVED", "user": "be-user", "body": "Fine."}])
-    assert states(story.run("status", "412"))["implement-T1"] == ("waiting", {"gate": "gate"})
+    data = gh(story)
+    base = {"branch": "fab0/412/implement-T1", "base": "fab0/412/base"}
+    data["pulls"]["acme/shop-api"] = [
+        dict(
+            base,
+            number=8,
+            state="merged",
+            comments=[{"id": 1, "user": "a", "body": "old pr late", "at": "2026-01-03T00:00:00Z"}],
+        ),
+        dict(
+            base,
+            number=9,
+            reviews=[
+                {"id": 1, "state": "COMMENTED", "user": "a", "body": "new pr early", "at": "2026-01-02T00:00:00Z"},
+                {"id": 2, "state": "COMMENTED", "user": "a", "body": "untimed", "at": ""},
+            ],
+        ),
+    ]
+    set_gh(story, data)
+    brief = handouts(story.run("next", "412"))["implement-T1"]["brief"]
+    assert brief.index("new pr early") < brief.index("untimed") < brief.index("old pr late")
 
 
 def test_a_removed_output_is_written_again(story):

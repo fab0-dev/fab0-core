@@ -139,9 +139,9 @@ def pr_view(run, name: str, ctx, unit=None) -> View:
     pr = pulls[-1] if pulls else None
     if part == "reviews":
         # every pull request of the branch: one merged at an older attempt keeps its reviews (from R6)
-        entries = []
+        found = []
         for p in pulls:
-            found = [
+            found += [
                 (r.get("at"), {"state": r["state"], "user": r["user"], "body": r["body"]})
                 for r in run.tracker.reviews(repo.github, p["number"])
                 if r["state"] in REVIEW_STATES
@@ -152,10 +152,13 @@ def pr_view(run, name: str, ctx, unit=None) -> View:
                 for c in run.tracker.comments(repo.github, p["number"])
                 if not c["body"].startswith("<!-- fab0:")
             ]
-            if all(at for at, _ in found):
-                found.sort(key=lambda e: e[0])  # stable: equal times keep their listed order
-            entries.append(found)
-        value = [e for found in entries for _, e in found]
+        # oldest first across all the pull requests; an entry without a time follows the one listed before it
+        keyed, last = [], ""
+        for at, e in found:
+            last = at or last
+            keyed.append((last, e))
+        keyed.sort(key=lambda k: k[0])  # stable: equal times keep their listed order
+        value = [e for _, e in keyed]
         if not value:
             return View(sha_json([]), "No reviews ask for changes.")
         lines = "\n\n".join(f"**{r['user']}** ({r['state'].lower().replace('_', ' ')}):\n\n{r['body']}" for r in value)
