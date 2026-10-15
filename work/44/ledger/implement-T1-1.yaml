@@ -1,0 +1,34 @@
+step: implement
+attempt: 1
+executor: agent
+actor: eugenefurs
+branch: fab0/44/implement-T1
+unit: T1
+model: sonnet
+base:
+  branch: fab0/44/base
+  sha: 118b1f770c2c7f14e3a70d85e7ecd47132ab813f
+inputs:
+  spec: sha256:0d6a02e1cb5a6b13ca6c440e581cb75e711eb4773ad5879dd03e3a88efb970fe
+  tasks: sha256:3a3435bd0491ffdc521a3cdbfe06aaf508163a9a7b3f80f82842baf1382c784b
+  unit: sha256:bbe4053d1e028d31792e12b281b8d0b848f6d57341be6c6b2bae223c5d3d9e0d
+  reviews: sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945
+claims:
+- core:plugins/fab0/lib/fab0_engine/version.py
+- core:plugins/fab0/lib/fab0_engine/cli.py
+- core:plugins/fab0/skills/run/SKILL.md
+- core:plugins/fab0/skills/inbox/SKILL.md
+- core:tests/test_installed.py
+gate:
+  type: auto
+summary: 'The engine now refuses to run when it is older than the plugin Claude Code
+  has installed for the project (S1 to S11). All 209 tests pass; ruff check and format
+  are clean. Changes: version.py check_engine, cli.py load_wiring calls it before
+  building the wiring (warnings merged into the result), run and inbox SKILL.md stop
+  on the refusal and show error and fix verbatim, and the new tests/test_installed.py
+  (16 tests). Note: tests/conftest.py is not in the claimed files, so other tests
+  still read the real CLAUDE_CONFIG_DIR or ~/.claude; a user-scope record newer than
+  0.6.3 would make them refuse. A later change could set CLAUDE_CONFIG_DIR to a temp
+  directory in conftest.py. Choices the spec left open: a scope user record counts
+  for any project, and an unused cached directory is named for removal even if newer
+  than the installed one.'
