@@ -22,7 +22,7 @@ Arguments: the first is the run id: the number of the run's tracker item, or a m
 
 ## Before the loop
 
-1. `fab0-resolve validate`. If it fails, show the errors and stop. Keep its `workspace`: repository names and their local paths.
+1. `fab0-resolve validate`. If it fails, show the errors and stop. If it fails with an `error` and a `fix` list (the engine is older than the installed plugin), show the `error` and every `fix` line verbatim, and stop: don't try another engine, and fetch, apply and hand out nothing. Keep its `workspace`: repository names and their local paths.
 2. For each repository with `present: true` and an `origin` remote, run `git -C <path> fetch --prune origin`. Say which repositories are missing; the run may not need them.
 
 ## The loop
