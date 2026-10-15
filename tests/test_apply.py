@@ -190,3 +190,32 @@ def test_a_foreach_closes_its_items_at_its_end(story):
     assert {"unit": "tasks--onEnd-1", "action": "tracker.child.close", "did": "closed #413"} in did(res)
     assert gh(story)["issues"]["acme/shop#413"]["state"] == "closed"
     assert story.run("apply", "412")["applied"] == []
+
+
+def test_flat_branching_merges_into_the_base_only_when_allowed(story):
+    """From R8 (found by the docs factory's planner): with flat branching a unit's parent is the base branch, so
+    an ungated unit waits for a person there, unless git.auto_merge allows the base."""
+    story.edit("fab0.yaml", lambda d: d["git"].update(branching="flat", auto_merge={"into": ["run"]}))
+    story.edit("pipelines/story.yaml", lambda d: d["steps"][0].update(gate="none"))
+    story.edit("pipelines/story.yaml", lambda d: d["steps"][1]["steps"][0]["gate"].update(merge="human"))
+    spec_done(story)
+    res = story.run("apply", "412")
+    assert states(res)["spec"] == ("waiting", {"gate": "human"})
+    assert did(res) == [{"unit": "spec", "pull": "opened acme/shop#1"}], "a person merges it into main"
+    story.edit("fab0.yaml", lambda d: d["git"].update(auto_merge={"into": ["run", "base"], "allow_base": True}))
+    story.commit("home", "allow merges into the base")  # apply doesn't merge into a checkout with changes
+    res = story.run("apply", "412")
+    assert {"unit": "spec", "merge": "merged into home:main"} in did(res)
+
+
+def test_a_label_decides_and_apply_merges(story):
+    """From R8 (found by the docs factory's reviewer): a human gate decided by a label merges like gate none."""
+    gate = {"human": {"via": "label", "label": "spec-ok"}}
+    story.edit("pipelines/story.yaml", lambda d: d["steps"][0].update(gate=gate))
+    story.commit("home", "a label gate")
+    spec_done(story)
+    res = story.run("apply", "412")
+    assert states(res)["spec"] == ("waiting", {"gate": "human"})
+    story.gh_edit(lambda d: d["issues"]["acme/shop#412"].setdefault("labels", []).append("spec-ok"))
+    res = story.run("apply", "412")
+    assert {"unit": "spec", "merge": "merged into home:fab0/412/base"} in did(res)

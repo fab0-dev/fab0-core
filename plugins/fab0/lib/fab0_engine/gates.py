@@ -91,6 +91,16 @@ def gate_brief(run: Run, unit: Unit, schema: dict) -> str:
                 lines.append(f"- {u.id}, attempt {u.attempt}: {u.latest.get('summary', '')}")
         lines.append("")
     lines += ["## What changed", ""] + changes(run, unit) + [""]
+    if unit.step and unit.branch:  # from R8: a reviewer switched branches in a person's checkout to run tests
+        trees = [
+            f"`{worktree(run, name, unit.branch, unit.id)}` ({name})"
+            for name in dict.fromkeys(unit.write or [unit.ledger_repo])
+        ]
+        lines += [
+            "Its branch is checked out in " + ", ".join(trees) + ": run the project's checks there. Don't check out "
+            "or switch branches in any other checkout.",
+            "",
+        ]
     if auto.get("skills"):
         lines += ["## Skills", "", "Load these with the Skill tool first: " + ", ".join(auto["skills"]) + ".", ""]
     retries = unit.gate.get("retry", 2)

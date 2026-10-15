@@ -200,7 +200,7 @@ def sync(run: Run, unit: Unit, name: str) -> str | None:
 def merge_unit(run: Run, unit: Unit) -> str | None:
     """Merge a unit's branch into its parent in every repository it worked in, within the merge policy."""
     auto = unit.auto is not None and unit.gate.get("merge") == "auto"
-    if unit.gate != "none" and not auto:
+    if unit.gate != "none" and not auto and not run.labelled(unit):  # a label decides like a merge (D54)
         return None
     if auto:
         into = "run" if unit.ctx.parent is not None else "base"

@@ -3,8 +3,8 @@
 Each kind has a hasher, so staleness stays generic:
 - `file`: the file's bytes, or every file under a directory, at the parent branch's head (or in a checkout);
 - `issue`: the part of a tracker item (body, title, labels, comments);
-- `pr`: the part of a pull request (body, reviews that ask for changes or comment, diff); no pull request
-  hashes as no reviews;
+- `pr`: the part of a pull request (body, reviews that ask for changes or comment together with people's
+  conversation comments, diff); no pull request hashes as no reviews;
 - `tool`: the call itself, its name and rendered arguments. The engine can't call a tool; the agent reads the
   value, and a change of an outside value doesn't make work stale (D29);
 - `none`: nothing.
@@ -139,12 +139,26 @@ def pr_view(run, name: str, ctx, unit=None) -> View:
     pr = pulls[-1] if pulls else None
     if part == "reviews":
         # every pull request of the branch: one merged at an older attempt keeps its reviews (from R6)
-        value = [
-            {"state": r["state"], "user": r["user"], "body": r["body"]}
-            for p in pulls
-            for r in run.tracker.reviews(repo.github, p["number"])
-            if r["state"] in REVIEW_STATES
-        ]
+        found = []
+        for p in pulls:
+            found += [
+                (r.get("at"), {"state": r["state"], "user": r["user"], "body": r["body"]})
+                for r in run.tracker.reviews(repo.github, p["number"])
+                if r["state"] in REVIEW_STATES
+            ]
+            # people's conversation comments count as feedback; fab0's own posts don't
+            found += [
+                (c.get("at"), {"state": "CONVERSATION_COMMENT", "user": c["user"], "body": c["body"]})
+                for c in run.tracker.comments(repo.github, p["number"])
+                if not c["body"].startswith("<!-- fab0:")
+            ]
+        # oldest first across all the pull requests; an entry without a time follows the one listed before it
+        keyed, last = [], ""
+        for at, e in found:
+            last = at or last
+            keyed.append((last, e))
+        keyed.sort(key=lambda k: k[0])  # stable: equal times keep their listed order
+        value = [e for _, e in keyed]
         if not value:
             return View(sha_json([]), "No reviews ask for changes.")
         lines = "\n\n".join(f"**{r['user']}** ({r['state'].lower().replace('_', ' ')}):\n\n{r['body']}" for r in value)
