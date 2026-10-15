@@ -206,3 +206,16 @@ def test_flat_branching_merges_into_the_base_only_when_allowed(story):
     story.commit("home", "allow merges into the base")  # apply doesn't merge into a checkout with changes
     res = story.run("apply", "412")
     assert {"unit": "spec", "merge": "merged into home:main"} in did(res)
+
+
+def test_a_label_decides_and_apply_merges(story):
+    """From R8 (found by the docs factory's reviewer): a human gate decided by a label merges like gate none."""
+    gate = {"human": {"via": "label", "label": "spec-ok"}}
+    story.edit("pipelines/story.yaml", lambda d: d["steps"][0].update(gate=gate))
+    story.commit("home", "a label gate")
+    spec_done(story)
+    res = story.run("apply", "412")
+    assert states(res)["spec"] == ("waiting", {"gate": "human"})
+    story.gh_edit(lambda d: d["issues"]["acme/shop#412"].setdefault("labels", []).append("spec-ok"))
+    res = story.run("apply", "412")
+    assert {"unit": "spec", "merge": "merged into home:fab0/412/base"} in did(res)
