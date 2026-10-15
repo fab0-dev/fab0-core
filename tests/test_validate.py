@@ -251,3 +251,13 @@ def test_a_profile_is_applied(factory):
     assert f.run("validate", "--profile", "cheap")["ok"]
     res = f.run("validate", "--profile", "dear", expect=3)
     assert res["errors"] == [{"file": ".fab0/fab0.yaml", "message": "no profile 'dear'"}]
+
+
+def test_merge_auto_inside_a_gated_block_targets_the_blocks_branch(factory):
+    """From R8: with flat branching, a unit inside a gated block merges into the block's branch, a run branch,
+    so `validate` checks `run`, as `apply` does."""
+    f = factory("story")
+    f.edit("fab0.yaml", lambda d: d["git"].update(branching="flat"))
+    f.edit("pipelines/story.yaml", lambda d: d["steps"][0].update(gate="human"))
+    f.edit("pipelines/story.yaml", lambda d: d["steps"][1].update(gate="human"))
+    assert f.run("validate")["ok"]

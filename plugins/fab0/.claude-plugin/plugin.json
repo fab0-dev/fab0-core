@@ -1,6 +1,6 @@
 {
   "name": "fab0",
-  "version": "0.6.1",
+  "version": "0.6.2",
   "description": "fab0 core: the engine that executes, validates and connects YAML pipelines (fab0-resolve), and the /fab0:run, /fab0:inbox and github skills",
   "author": {
     "name": "fab0-dev",

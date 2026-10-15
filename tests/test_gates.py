@@ -227,3 +227,13 @@ def test_then_fail_stops_the_run_after_the_retries(factory):
         classify(f, {"severity": "low", "area": "billing"})
         record_gate(f, "7", "classify", exit=1, output=f"attempt {attempt}: not enough detail\n")
     assert states(f.run("status", "7"))["classify"] == ("blocked", {"failed": "rejected 2 times"})
+
+
+def test_a_gate_brief_names_where_the_work_is_checked_out(story):
+    """From R8: so a reviewer runs checks in the unit's worktree, not by switching a person's checkout."""
+    do_spec(story, tasks="- {id: T1, title: Booking API, repo: backend, files: [src/a.py]}\n")
+    h = handouts(story.run("next", "412"))["implement-T1"]
+    trees = start_work(story, h)
+    finish(story, "412", h, trees, {("backend", "src/a.py"): "x = 1\n"}, {"summary": "Done."})
+    brief = handouts(story.run("next", "412", "--unit", "implement-T1"))["implement-T1"]["brief"]
+    assert f"Its branch is checked out in `{trees['backend']}` (backend)" in brief

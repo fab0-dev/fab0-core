@@ -292,6 +292,7 @@ class Pipeline:
         self.steps: dict[str, dict] = {}  # every step this pipeline runs, files and inline, by name
         self.gated: set[str] = set()  # steps with an auto gate, for `verdict` conditions
         self.ids: set[str] = set()
+        self.gated_depth = 0  # inside a gated block, units merge into the block's branch, never the base
 
     def error(self, message: str) -> None:
         self.w.error(self.where, message)
@@ -411,6 +412,8 @@ class Pipeline:
                     if key in node:
                         kind = "foreach" if "foreach" in node else "parallel"
                         self._check_actions(f"{here}.{key}", node[key], kind)
+            nested = isinstance(node, dict) and "step" not in node and "gate" in node
+            self.gated_depth += nested
             if isinstance(node, str) or "step" in node:
                 available = self._walk_step(node, here, available, in_foreach)
             elif "foreach" in node:
@@ -425,6 +428,7 @@ class Pipeline:
                 available = after
             elif "call" in node:
                 self.error(f"{here}: call (nested pipelines) is not supported yet")
+            self.gated_depth -= nested
         return available
 
     def _walk_step(self, node, at: str, available: set, in_foreach: bool) -> set:
@@ -551,7 +555,7 @@ class Pipeline:
             self.w.check_skills(self.where, f"{at}.gate.auto.skills", auto.get("skills", []))
         if gate.get("merge") == "auto":
             into = self.policy.get("auto_merge", {}).get("into", [])
-            target = "run" if self.policy["branching"] == "run" else "base"
+            target = "run" if self.policy["branching"] == "run" or self.gated_depth else "base"
             if target not in into:
                 self.error(
                     f"{at}.gate: merge auto would merge into the {target} branch, which git.auto_merge.into "
