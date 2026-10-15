@@ -5,7 +5,7 @@
     "url": "https://github.com/fab0-dev"
   },
   "metadata": {
-    "description": "fab0: pipelines of Claude Code agents, wired in YAML and carried on GitHub"
+    "description": "fab0: a toolkit for building and operating software factories as YAML pipelines, run in Claude Code and carried on GitHub"
   },
   "plugins": [
     {
@@ -14,10 +14,10 @@
         "source": "git-subdir",
         "url": "fab0-dev/fab0-core",
         "path": "plugins/fab0",
-        "ref": "fab0--v0.5.0"
+        "ref": "fab0--v0.6.0"
       },
-      "description": "fab0 core: the resolver, the core agents (spec-author, implementer, reviewer) and the /fab0:run and /fab0:inbox skills",
-      "version": "0.5.0",
+      "description": "fab0 core: the engine that executes, validates and connects YAML pipelines (fab0-resolve), and the /fab0:run, /fab0:inbox and github skills",
+      "version": "0.6.0",
       "license": "Apache-2.0"
     }
   ]
