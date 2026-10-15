@@ -136,7 +136,7 @@
           }
         },
         "auto_merge": {
-          "description": "Where an auto gate with `merge: auto` may merge. Default: into run branches only.",
+          "description": "Where `apply` may merge on its own. An auto gate with `merge: auto` merges only into the kinds of branch in `into`. Any merge into the base branch, including a gate `none` or label-decided unit under flat branching, also needs `into: [base]` and `allow_base: true`; otherwise a person merges it. Default: into run branches only.",
           "type": "object",
           "additionalProperties": false,
           "properties": {

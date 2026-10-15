@@ -46,7 +46,11 @@ def perform(run: Run, unit: Unit) -> str:
                 made.append(repo.name)
         return f"created {run.run_branch} in {', '.join(made)}"
     if name == "git.sync-base":
+        from .actions import ahead
+
         for repo in written(run):
+            if not ahead(repo, run):
+                continue  # from R8: a run branch with no work needs no base, and a merge would make it look busy
             result = Writer(repo).merge(repo.base, run.run_branch, f"fab0: bring {repo.base} into run {run.run}")
             if "conflict" in result:
                 raise Fail(
