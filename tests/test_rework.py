@@ -287,3 +287,16 @@ def test_the_main_checkouts_wiring_governs_from_a_worktree(story):
     )
     brief = next(x for x in json.loads(run.stdout)["handouts"] if x["unit"] == "spec")["brief"]
     assert "### reviews" in brief
+
+
+def test_an_issue_artifact_reads_a_board_field_and_a_units_own_item(story):
+    """From R7: `issue` artifacts read a board field, and with `of: unit` the element's own tracker item."""
+    arts = story.home / ".fab0" / "artifacts"
+    (arts / "stage.yaml").write_text("artifact: stage\nkind: issue\nissue: {part: field, field: state}\n")
+    (arts / "task-item.yaml").write_text("artifact: task-item\nkind: issue\nissue: {of: unit, part: body}\n")
+    story.edit("steps/implement.yaml", lambda d: d.update(inputs=d["inputs"] + ["stage", "task-item"]))
+    do_spec(story, tasks=ONE_TASK)
+    story.gh_edit(lambda d: d["issues"]["acme/shop#500"].update(body="Keep the API stable."))
+    brief = handouts(story.run("next", "412"))["implement-T1"]["brief"]
+    assert "The State field of the run's tracker item:\n\n````\nStarted" in brief
+    assert "The body of acme/shop#500:\n\n````\nKeep the API stable." in brief

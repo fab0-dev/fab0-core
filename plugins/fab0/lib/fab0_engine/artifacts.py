@@ -99,20 +99,29 @@ def file_view(run, name: str, ctx, tree: Path | None = None) -> View:
 
 def issue_view(run, name: str, ctx) -> View:
     spec = run.w.artifacts[name]["issue"]
-    if spec.get("of", "run") == "unit":
-        return View(None, "A unit's own tracker item is read from step R3.")
-    item = run.item()
     part = spec["part"]
-    if item is None:
-        return View(None, "The run has no tracker item.")
+    if spec.get("of", "run") == "unit":
+        ref = (ctx.element or {}).get("item")  # the element's item, once tracker.child.sync made it
+        if not ref:
+            return View(None, "This unit has no tracker item.")
+        repo, number = ref.split("#")[0], int(ref.split("#")[1])
+        item, whose = run.tracker.issue(repo, number), ref
+    else:
+        item = run.item()
+        if item is None:
+            return View(None, "The run has no tracker item.")
+        repo, number, whose = run.home.github, int(run.run), "the run's tracker item"
     if part == "field":
-        return View(None, "Tracker fields are read from step R3.")
-    if part == "comments":
-        value = [{"user": c["user"], "body": c["body"]} for c in run.tracker.comments(run.home.github, int(run.run))]
+        board = run.w.project.get("tracker", {})
+        field = board.get("fields", {}).get(spec["field"], spec["field"])
+        value = run.tracker.fields(repo, number, board.get("owner"), board.get("project")).get(field)
+        part = f"{field} field"
+    elif part == "comments":
+        value = [{"user": c["user"], "body": c["body"]} for c in run.tracker.comments(repo, number)]
     else:
         value = item[part]
     text = value if isinstance(value, str) else json.dumps(value, indent=2)
-    return View(sha_json(value), f"The {part} of the run's tracker item:\n\n````\n{text}\n````")
+    return View(sha_json(value), f"The {part} of {whose}:\n\n````\n{text}\n````")
 
 
 def pr_view(run, name: str, ctx, unit=None) -> View:

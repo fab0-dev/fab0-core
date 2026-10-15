@@ -274,6 +274,12 @@ class Wiring:
         return bool(step.get("repos", {}).get("write")) or any(a.get("kind") == "file" for a in outputs)
 
 
+def base_allowed(policy: dict) -> bool:
+    """Merging into the base branch needs both `into: [base]` and `allow_base: true`."""
+    merge = policy.get("auto_merge", {})
+    return "base" in merge.get("into", []) and merge.get("allow_base") is True
+
+
 class Pipeline:
     """One pipeline's tree, walked once to check what spans its nodes."""
 
@@ -336,6 +342,8 @@ class Pipeline:
             self.w.check_action(self.where, f"{at}[{i}]", name)
             if name in RUN_LEVEL and place != "pipeline":
                 self.error(f"{at}[{i}]: {name} acts on the whole run; it belongs in the pipeline's onStart or onEnd")
+            if name == "pr.merge" and not base_allowed(self.policy):
+                self.error(f"{at}[{i}]: pr.merge merges into the base branch, which git.auto_merge doesn't allow")
             if name == "tracker.child.sync" and not (place == "foreach" and at.endswith("onStart")):
                 self.error(f"{at}[{i}]: {name} makes an item per element; it belongs in a foreach's onStart")
             if name == "tracker.child.close" and not (place == "foreach" and at.endswith("onEnd")):

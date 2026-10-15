@@ -119,6 +119,9 @@ def test_a_unit_claimed_on_another_machine_isnt_handed_out(story):
     git(other, "push", "-q", "origin", "origin/fab0/412/base:refs/heads/fab0/412/spec")
     res = story.run("next", "412")
     assert states(res)["spec"] == ("running", {"claimed": "elsewhere"}) and res["handouts"] == []
+    git(story.repo("home"), "fetch", "-q", "origin")
+    res = story.run("next", "412")
+    assert states(res)["spec"] == ("running", {"claimed": "elsewhere"}), "from R7: also once the claim is fetched"
 
 
 def test_next_claims_a_unit_on_the_remote(story):
