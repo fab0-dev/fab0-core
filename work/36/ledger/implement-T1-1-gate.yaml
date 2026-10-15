@@ -1,0 +1,84 @@
+step: implement
+attempt: 1
+executor: agent
+actor: eugenefurs
+branch: fab0/36/implement-T1
+base:
+  branch: fab0/36/base
+  sha: a9862a62917c84c77bfcd2034b66c58cf0ca1af6
+unit: T1
+model: opus
+gate:
+  type: auto
+  merge: auto
+  into: fab0/36/base
+  agent: reviewer
+  decision: reject
+summary: 'The code change is mostly sound. The diff stays within the task''s three
+  files plus the run''s own ledger entry. `uv run pytest -q` passes all 186 tests,
+  and `uv run ruff check .` and `uv run ruff format --check .` are clean.; The test
+  for S7 doesn''t show the scenario. It uses an APPROVED review, which was filtered
+  out both before and after this change, so it repeats the existing test_an_approving_review_changes_nothing
+  and never checks that a COMMENTED or CHANGES_REQUESTED review with no comments hashes
+  exactly as before. That hash compatibility is the spec''s Compatibility constraint.;
+  The test for S4 checks only that the unit isn''t sent back. It never checks the
+  scenario''s second Then: that the brief says no reviews ask for changes when the
+  pull request''s only comment is fab0''s own.; The ordering doesn''t follow the spec''s
+  decision. The spec orders reviews and comments by time across all the branch''s
+  pull requests, but the code sorts within each pull request and then joins them in
+  pull-request order. It also skips sorting a pull request entirely when any entry
+  lacks `at`, instead of only keeping the listed order for entries without one.'
+verdict:
+  decision: reject
+  reasons:
+  - The code change is mostly sound. The diff stays within the task's three files
+    plus the run's own ledger entry. `uv run pytest -q` passes all 186 tests, and
+    `uv run ruff check .` and `uv run ruff format --check .` are clean.
+  - The test for S7 doesn't show the scenario. It uses an APPROVED review, which was
+    filtered out both before and after this change, so it repeats the existing test_an_approving_review_changes_nothing
+    and never checks that a COMMENTED or CHANGES_REQUESTED review with no comments
+    hashes exactly as before. That hash compatibility is the spec's Compatibility
+    constraint.
+  - 'The test for S4 checks only that the unit isn''t sent back. It never checks the
+    scenario''s second Then: that the brief says no reviews ask for changes when the
+    pull request''s only comment is fab0''s own.'
+  - The ordering doesn't follow the spec's decision. The spec orders reviews and comments
+    by time across all the branch's pull requests, but the code sorts within each
+    pull request and then joins them in pull-request order. It also skips sorting
+    a pull request entirely when any entry lacks `at`, instead of only keeping the
+    listed order for entries without one.
+  findings:
+  - check: Scenarios
+    message: The S7 test uses an APPROVED review, which REVIEW_STATES has always filtered
+      out, so it doesn't show that a pull request whose COMMENTED or CHANGES_REQUESTED
+      reviews have no conversation comments hashes as before. Add a test that pins
+      the `reviews` value or hash to the old `[{state, user, body}]` list, or that
+      records a unit with such a review and then checks it isn't stale.
+    location: tests/test_rework.py:212
+  - check: Scenarios
+    message: The S4 test checks only the unit's status; nothing shows that the brief
+      says 'No reviews ask for changes.' when the only pull-request comment starts
+      with `<!-- fab0:`.
+    location: tests/test_rework.py:174
+  - check: Agreement with the spec
+    message: The spec's decision orders entries by time across all the branch's pull
+      requests, but the code sorts within each pull request and joins them in pull-request
+      order. A comment added later to an older merged pull request therefore comes
+      before older feedback on the newer one. Either sort across all pull requests,
+      or, if the per-pull-request order is meant to protect the S7 hash, say so and
+      get that confirmed.
+    location: plugins/fab0/lib/fab0_engine/artifacts.py:155
+  - check: Agreement with the spec
+    message: '`if all(at for at, _ in found)` turns off sorting for a whole pull request
+      when any entry lacks `at`, although the spec says only the entries without one
+      keep their listed order. No test covers a mix of timed and untimed entries.'
+    location: plugins/fab0/lib/fab0_engine/artifacts.py:155
+  - check: Tests and checks
+    message: 'Note only: while reviewing, I checked out fab0/36/implement-T1 as a
+      detached HEAD in /Users/zhen/Work/Fab0/fab0-core to run the tests, then switched
+      back to main. The working tree is clean and nothing was edited or committed.'
+    location: /Users/zhen/Work/Fab0/fab0-core
+  details:
+    unmet:
+    - S4
+    - S7

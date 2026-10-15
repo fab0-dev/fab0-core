@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 
 from conftest import SCRIPT, git, start_docs
+from fab0_engine.hashing import sha_json
 from test_run import (
     BRIEF,
     DOCS_GH,
@@ -135,6 +136,142 @@ def test_an_approving_review_changes_nothing(story):
     ]
     set_gh(story, data)
     assert states(story.run("status", "412"))["implement-T1"] == ("waiting", {"gate": "gate"})
+
+
+def _pull_with(story, **extra):
+    data = gh(story)
+    pull = {"number": 9, "branch": "fab0/412/implement-T1", "base": "fab0/412/base"}
+    pull.update(extra)
+    data["pulls"]["acme/shop-api"] = [pull]
+    set_gh(story, data)
+
+
+def test_a_conversation_comment_reworks_the_unit(story):
+    do_spec(story, tasks=ONE_TASK)
+    implement_t1(story)
+    _pull_with(story, comments=[{"id": 1, "user": "po-user", "body": "Rename the flag to --dry"}])
+    nxt = story.run("next", "412")
+    assert states(nxt)["implement-T1"] == ("ready", {"rework": ["stale"]})
+    brief = handouts(nxt)["implement-T1"]["brief"]
+    assert "These inputs changed since then, so read them again: reviews." in brief
+    assert "**po-user** (conversation comment):" in brief and "Rename the flag to --dry" in brief
+
+
+def test_reviews_and_comments_are_interleaved_oldest_first(story):
+    do_spec(story, tasks=ONE_TASK)
+    implement_t1(story)
+    _pull_with(
+        story,
+        reviews=[
+            {"id": 1, "state": "COMMENTED", "user": "a", "body": "first", "at": "2026-01-01T10:00:00Z"},
+            {"id": 2, "state": "CHANGES_REQUESTED", "user": "a", "body": "third", "at": "2026-01-01T10:10:00Z"},
+        ],
+        comments=[{"id": 1, "user": "b", "body": "second", "at": "2026-01-01T10:05:00Z"}],
+    )
+    brief = handouts(story.run("next", "412"))["implement-T1"]["brief"]
+    assert brief.index("first") < brief.index("second") < brief.index("third")
+
+
+def test_a_fab0_comment_does_not_count(story):
+    do_spec(story, tasks=ONE_TASK)
+    implement_t1(story)
+    _pull_with(story, comments=[{"id": 1, "user": "me", "body": "<!-- fab0:questions -->\nWhich hotel?"}])
+    assert states(story.run("status", "412"))["implement-T1"] == ("waiting", {"gate": "gate"})
+
+
+def test_the_brief_says_no_reviews_when_the_only_comment_is_fab0s(story):
+    story.edit("steps/spec.yaml", lambda d: d.update(inputs=["intent", "reviews"]))
+    started(story)
+    data = gh(story)
+    data["pulls"]["acme/shop"] += [
+        {
+            "number": 5,
+            "branch": "fab0/412/spec",
+            "base": "fab0/412/base",
+            "comments": [{"id": 1, "user": "me", "body": "<!-- fab0:questions -->\nWhich hotel?"}],
+        }
+    ]
+    set_gh(story, data)
+    brief = handouts(story.run("next", "412"))["spec"]["brief"]
+    assert "No reviews ask for changes." in brief and "Which hotel?" not in brief
+
+
+def test_a_comment_on_a_merged_pull_request_does_not_rework_the_unit(story):
+    do_spec(story, tasks=ONE_TASK)
+    implement_t1(story)
+    story.merge("backend", "fab0/412/implement-T1", "fab0/412/base")
+    _pull_with(story, state="merged", comments=[{"id": 1, "user": "po-user", "body": "Too late."}])
+    assert states(story.run("status", "412"))["implement-T1"] == ("done", None)
+
+
+def test_comments_of_an_earlier_merged_pull_request_stay_in_the_brief(story):
+    story.edit("steps/spec.yaml", lambda d: d.update(inputs=["intent", "reviews"]))
+    started(story)
+    h = handouts(story.run("next", "412"))["spec"]
+    files = {("home", "specs/412.md"): SPEC, ("home", "work/412/tasks.yaml"): ONE_TASK}
+    finish(story, "412", h, start_work(story, h), files, {"summary": "Wrote the spec."})
+    data = gh(story)
+    later = {"id": 2, "state": "COMMENTED", "user": "po-user", "body": "And keep it short."}
+    data["pulls"]["acme/shop"] += [
+        {
+            "number": 5,
+            "branch": "fab0/412/spec",
+            "base": "fab0/412/base",
+            "comments": [{"id": 1, "user": "po-user", "body": "A demo hotel."}],
+            "state": "merged",
+        },
+        {"number": 6, "branch": "fab0/412/spec", "base": "fab0/412/base", "reviews": [later]},
+    ]
+    set_gh(story, data)
+    brief = handouts(story.run("next", "412"))["spec"]["brief"]
+    assert brief.index("A demo hotel.") < brief.index("And keep it short.")
+
+
+def test_reviews_without_comments_hash_as_before(story):
+    do_spec(story, tasks=ONE_TASK)
+    old = [
+        {"state": "COMMENTED", "user": "a", "body": "Hm."},
+        {"state": "CHANGES_REQUESTED", "user": "b", "body": "No."},
+    ]
+    data = gh(story)
+    data["pulls"]["acme/shop-api"] = [
+        {
+            "number": 9,
+            "branch": "fab0/412/implement-T1",
+            "base": "fab0/412/base",
+            "reviews": [dict(r, id=n) for n, r in enumerate(old, 1)],
+        }
+    ]
+    set_gh(story, data)
+    rec = handouts(story.run("next", "412"))["implement-T1"]
+    res = finish(story, "412", rec, start_work(story, rec), {("backend", "src/a.py"): "x = 1\n"}, {"summary": "D"})
+    assert res["recorded"]["inputs"]["reviews"] == sha_json(old)
+
+
+def test_reviews_and_comments_of_all_pull_requests_are_ordered_by_time(story):
+    do_spec(story, tasks=ONE_TASK)
+    implement_t1(story)
+    data = gh(story)
+    base = {"branch": "fab0/412/implement-T1", "base": "fab0/412/base"}
+    data["pulls"]["acme/shop-api"] = [
+        dict(
+            base,
+            number=8,
+            state="merged",
+            comments=[{"id": 1, "user": "a", "body": "old pr late", "at": "2026-01-03T00:00:00Z"}],
+        ),
+        dict(
+            base,
+            number=9,
+            reviews=[
+                {"id": 1, "state": "COMMENTED", "user": "a", "body": "new pr early", "at": "2026-01-02T00:00:00Z"},
+                {"id": 2, "state": "COMMENTED", "user": "a", "body": "untimed", "at": ""},
+            ],
+        ),
+    ]
+    set_gh(story, data)
+    brief = handouts(story.run("next", "412"))["implement-T1"]["brief"]
+    assert brief.index("new pr early") < brief.index("untimed") < brief.index("old pr late")
 
 
 def test_a_removed_output_is_written_again(story):

@@ -1,0 +1,27 @@
+step: implement
+attempt: 2
+executor: agent
+actor: eugenefurs
+branch: fab0/36/implement-T1
+unit: T1
+model: sonnet
+base:
+  branch: fab0/36/base
+  sha: a9862a62917c84c77bfcd2034b66c58cf0ca1af6
+inputs:
+  spec: sha256:f09d2169763c98bf62794bad6a79ca41d4be6078242eaedf33f8c85ab35e9ebe
+  tasks: sha256:bfe84a55fe49d15a19432e31b0be032cf76c479155c2bd15a2cfe757eaa58817
+  unit: sha256:149e29e03b17403094a19c9b8055f59b90d97d10ef7d61084ff0dd4e4e005607
+  reviews: sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945
+rework:
+- rejected
+claims:
+- core:plugins/fab0/lib/fab0_engine/tracker.py
+- core:plugins/fab0/lib/fab0_engine/artifacts.py
+- core:tests/test_rework.py
+gate:
+  type: auto
+summary: 'Reworked all gate findings: artifacts.py now sorts reviews and comments
+  oldest first across all the branch''s pull requests (an entry without `at` keeps
+  its listed place); tests/test_rework.py adds the S7 hash test, the S4 brief test
+  and an ordering test. 188 tests pass; ruff clean.'

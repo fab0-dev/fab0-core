@@ -1,0 +1,38 @@
+step: implement
+attempt: 2
+executor: agent
+actor: eugenefurs
+branch: fab0/36/implement-T1
+base:
+  branch: fab0/36/base
+  sha: a9862a62917c84c77bfcd2034b66c58cf0ca1af6
+unit: T1
+model: opus
+gate:
+  type: auto
+  merge: auto
+  into: fab0/36/base
+  agent: reviewer
+  decision: approve
+summary: Scenarios S1 to S7 are implemented in artifacts.py and tracker.py, and each
+  has a test in tests/test_rework.py.; The change touches only the task's three files.;
+  It follows the spec's decisions.; 188 tests pass; ruff check and format are clean.
+verdict:
+  decision: approve
+  reasons:
+  - Scenarios S1 to S7 are implemented in artifacts.py and tracker.py, and each has
+    a test in tests/test_rework.py.
+  - The change touches only the task's three files.
+  - It follows the spec's decisions.
+  - 188 tests pass; ruff check and format are clean.
+  findings:
+  - check: quality
+    message: An entry with no time takes the time of the entry listed before it, and
+      the first untimed entries get the empty string, so they sort ahead of every
+      timed entry. The spec only says untimed entries keep their listed order, so
+      this is acceptable, but the behaviour is implicit.
+    location: plugins/fab0/lib/fab0_engine/artifacts.py:155
+  - check: tests
+    message: The S7 test checks hash compatibility, but no test starts from a record
+      written by the previous engine and confirms the unit isn't stale.
+    location: tests/test_rework.py:230
