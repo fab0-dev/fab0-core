@@ -10,7 +10,8 @@ in a JSON file instead of GitHub (used by the tests):
      "pulls": {"owner/repo": [{"number", "branch", "base", "state", "draft", "body", "diff",
                                "reviews": [...], "comments": [...]}]}}
 
-A review is {"id", "state", "body", "user"}; a comment is {"id", "body", "user"}.
+A review is {"id", "state", "body", "user", "at"}; a comment is {"id", "body", "user", "at"}; `at` is optional
+(a time, ISO 8601) and orders a pull request's reviews and conversation comments.
 """
 
 from __future__ import annotations
@@ -129,7 +130,15 @@ class GhCli:
 
     def comments(self, repo: str, number: int) -> list[dict]:
         data = self._api(f"repos/{repo}/issues/{number}/comments?per_page=100")
-        return [{"id": d["id"], "body": d.get("body") or "", "user": (d.get("user") or {}).get("login")} for d in data]
+        return [
+            {
+                "id": d["id"],
+                "body": d.get("body") or "",
+                "user": (d.get("user") or {}).get("login"),
+                "at": d.get("created_at"),
+            }
+            for d in data
+        ]
 
     def pulls(self, repo: str, branch: str, base: str) -> list[dict]:
         """Every pull request from `branch` into `base`, in any state, oldest first."""
@@ -158,6 +167,7 @@ class GhCli:
                 "state": d["state"],
                 "body": d.get("body") or "",
                 "user": (d.get("user") or {}).get("login"),
+                "at": d.get("submitted_at"),
             }
             for d in data
         ]
