@@ -245,8 +245,14 @@ def claim(run: Run, unit: Unit) -> bool:
     for name in dict.fromkeys(unit.write or [unit.ledger_repo]):
         repo = run.repos[name]
         parent = repo.fresh(run.parent_in(repo, unit.ctx.parent))
-        if repo.fresh(unit.branch) or parent is None:
-            continue  # a rework's branch is the unit's already; a parent that doesn't exist yet is the session's
+        if repo.fresh(unit.branch):
+            if unit.latest is None:
+                # a first attempt whose branch exists, with no hand-out here (it would be `running`): another
+                # machine claimed it, and this one fetched the claim (from R7)
+                return False
+            continue  # a rework's branch is the unit's already
+        if parent is None:
+            continue  # a parent that doesn't exist yet is the session's
         if not Writer(repo).claim(unit.branch, repo.sha(parent), run.actor or "fab0"):
             return False
     return True
