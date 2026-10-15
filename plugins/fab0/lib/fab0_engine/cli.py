@@ -27,7 +27,7 @@ from .handout import action_handout, claim, handout, record, save_pending
 from .inbox import inbox
 from .schedule import Run
 from .tracker import make_tracker
-from .version import read_version
+from .version import check_engine, read_version
 from .wiring import Wiring
 
 RUN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
@@ -57,8 +57,13 @@ def main_checkout(folder: Path) -> Path:
     return main if main != folder and (main / ".fab0" / "fab0.yaml").is_file() else folder
 
 
+WARNINGS: list[str] = []  # warnings of the command running; main() adds them to its result
+
+
 def load_wiring(args) -> Wiring:
-    wiring = Wiring(find_project(args.project), getattr(args, "profile", None))
+    root = find_project(args.project)
+    WARNINGS.extend(check_engine(root))  # refuses before anything else when the engine is older than the plugin
+    wiring = Wiring(root, getattr(args, "profile", None))
     if wiring.errors:
         raise Fail(EXIT_INVALID, "invalid wiring", errors=wiring.errors)
     return wiring
@@ -260,8 +265,11 @@ def main(argv: list[str] | None = None) -> int:
         args.handler = cmd_version
     elif not args.command:
         parser.error("a command is required")
+    WARNINGS.clear()
     try:
         result, code = args.handler(args), EXIT_OK
+        if WARNINGS:
+            result = {**result, "warnings": [*WARNINGS, *result.get("warnings", [])]}
     except Fail as fail:
         result, code = {"ok": False, **fail.payload}, fail.code
     print(json.dumps(result, indent=2, ensure_ascii=False))

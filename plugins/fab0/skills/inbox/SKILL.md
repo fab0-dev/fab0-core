@@ -7,7 +7,7 @@ argument-hint: "[--as USER]"
 # /fab0:inbox $ARGUMENTS
 
 1. Run `fab0-resolve inbox $ARGUMENTS`. It changes nothing.
-2. If it fails, show the error and stop.
+2. If it fails, show the `error` and every `fix` line verbatim (an engine older than the installed plugin fails with a `fix` list), and stop. Don't try another engine.
 3. Render its JSON as below. Leave out empty sections and keep each line short.
 
 ```
