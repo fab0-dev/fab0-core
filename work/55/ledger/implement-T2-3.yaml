@@ -1,0 +1,39 @@
+step: implement
+attempt: 3
+executor: agent
+actor: eugenefurs
+branch: fab0/55/implement-T2
+unit: T2
+model: sonnet
+base:
+  branch: fab0/55/base
+  sha: 34a8b0044a8374c1f82caf44165fc0f939d39f28
+inputs:
+  spec: sha256:d88b5b57cce2b7b09e56c30934de429032ced3cc864fb617127d1baa6ca66d40
+  tasks: sha256:c4e8d973b1dfc582f226f234d70b1969635e1013e0fc4b49dfe03993573b062d
+  unit: sha256:65797ff50803b67204f0ddab77f6f65ecfafe706a440b01598efd640b02416da
+  reviews: sha256:a52f679583beb3224ddbbbd84fcaddf1a7f0a443ffea49a3d1d39e4ac8b23fc3
+rework:
+- stale
+claims:
+- core:plugins/fab0/lib/fab0_engine/schedule.py
+- core:plugins/fab0/lib/fab0_engine/artifacts.py
+- core:plugins/fab0/lib/fab0_engine/actions.py
+- core:tests/test_concurrency.py
+gate:
+  type: auto
+summary: 'No code change this attempt. The one change in the reviews is the answer
+  to my earlier S4 question: the run of S4 is ''a run with independent units''. The
+  S4 test already uses that run (five independent tasks, 0.3 s per call, 2 to 4 tracker
+  calls in flight, 5 pull requests read together), and the S1 run is tested to make
+  exactly the item read and T1''s pull request, one at a time. I kept the spec''s
+  decision that only reads the evaluation then uses are prefetched. Checks from the
+  branch: `uv run pytest` gives 296 passed; `uv run ruff check .` is clean; `uv run
+  ruff format --check .` is clean; `tests/test_concurrency.py` passed 3 more times
+  in a row (18 passed each). I did not run `gh`. S21 (run 44 on a release) is not
+  measured yet; it follows the release. Spec wording for the person who owns it: S4''s
+  Given reads ''the run of S1'' but, as settled in the review, it is shown on a run
+  with independent units. If the spec is meant to match, change S4''s Given to say
+  so; I did not edit the spec.'
+started: '2026-10-16T17:43:57Z'
+ended: '2026-10-16T17:48:54Z'
