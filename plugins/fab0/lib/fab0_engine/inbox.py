@@ -13,12 +13,16 @@ Each is evaluated like `status`, and its units are sorted for the person asking:
 - `blocked`: units held back by a signal a person may need to act on (the tracker, an invalid dependency, a
   failure, another run's claim, an undecidable condition). Units that only wait their turn (order, data,
   claim, limit) aren't listed.
+
+Each open run also carries `latest`, the time and line of the last event of its log on this machine, when it
+has one.
 """
 
 from __future__ import annotations
 
 import re
 
+from .events import events_path, read_events
 from .git import Repo
 from .ledger import DEFAULT_PATH
 from .schedule import Run, Unit
@@ -82,6 +86,12 @@ def pull_of(run: Run, unit: Unit) -> str | None:
     return f"{repo.github}#{pr['number']}" if pr and pr["state"] == "open" else None
 
 
+def latest_event(run: Run) -> dict | None:
+    """The time and line of the last event in the run's log on this machine, if it has one. Read-only."""
+    events = read_events(events_path(run))
+    return {"time": events[-1]["time"], "line": events[-1]["line"]} if events else None
+
+
 def inbox(wiring, tracker, user: str, pick) -> dict:
     """`pick(run)` names a run's pipeline, or raises when it can't."""
     roles = {role for role, who in wiring.people.items() if user in who.get("github", [])}
@@ -98,8 +108,15 @@ def inbox(wiring, tracker, user: str, pick) -> dict:
         if result["kind"] == "done":
             continue
         item = run.item()
+        latest = latest_event(run)
         out["runs"].append(
-            {"run": run_id, "pipeline": name, "kind": result["kind"], **({"title": item["title"]} if item else {})}
+            {
+                "run": run_id,
+                "pipeline": name,
+                "kind": result["kind"],
+                **({"title": item["title"]} if item else {}),
+                **({"latest": latest} if latest else {}),
+            }
         )
         if result["kind"] == "waiting":
             owner = run.w.project["repos"]["home"].get("owner")

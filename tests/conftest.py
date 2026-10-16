@@ -2,9 +2,12 @@
 
 import json
 import os
+import queue
 import shutil
+import signal
 import subprocess
 import sys
+import threading
 from pathlib import Path
 
 import pytest
@@ -127,15 +130,71 @@ class Factory:
         change(data)
         (self.home / ".fab0" / rel).write_text(yaml.safe_dump(data, sort_keys=False))
 
-    def run(self, *args: str, expect: int | None = 0) -> dict:
+    def env(self) -> dict:
         path = f"{Path(__file__).parent / 'bin'}{os.pathsep}{os.environ['PATH']}"  # stand-in linters
-        env = {**os.environ, "FAB0_GH_FAKE": str(self.gh_path), "PATH": path}
+        return {**os.environ, "FAB0_GH_FAKE": str(self.gh_path), "PATH": path}
+
+    def text(self, *args: str, expect: int | None = 0, cwd: Path | None = None, env: dict | None = None):
+        """A command whose success output is text (`log`): the completed process."""
+        result = subprocess.run(
+            [sys.executable, str(SCRIPT), *args],
+            cwd=cwd or self.home,
+            capture_output=True,
+            text=True,
+            env=env or self.env(),
+        )
+        if expect is not None:
+            assert result.returncode == expect, result.stdout + result.stderr
+        return result
+
+    def follow(self, *args: str) -> "Follower":
+        """`fab0-resolve log <args> --follow`, started in the background; the caller stops it with `interrupt()`."""
+        proc = subprocess.Popen(
+            [sys.executable, str(SCRIPT), "log", *args, "--follow"],
+            cwd=self.home,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=self.env(),
+        )
+        return Follower(proc)
+
+    def run(self, *args: str, expect: int | None = 0) -> dict:
+        env = self.env()
         result = subprocess.run(
             [sys.executable, str(SCRIPT), *args], cwd=self.home, capture_output=True, text=True, env=env
         )
         if expect is not None:
             assert result.returncode == expect, result.stdout + result.stderr
         return json.loads(result.stdout)
+
+
+class Follower:
+    """`fab0-resolve log --follow` running in the background: its lines as they come, and a way to stop it the way a
+    person does (Ctrl-C). A test never waits on a timeout to end it."""
+
+    def __init__(self, proc: subprocess.Popen):
+        self.proc = proc
+        self.lines: queue.Queue = queue.Queue()
+        threading.Thread(target=self._read, daemon=True).start()
+
+    def _read(self) -> None:
+        for line in self.proc.stdout:
+            self.lines.put(line.rstrip("\n"))
+        self.lines.put(None)
+
+    def next(self, timeout: float = 5.0) -> str | None:
+        """The next line, or None when nothing came within `timeout` seconds (or the process ended)."""
+        try:
+            return self.lines.get(timeout=timeout)
+        except queue.Empty:
+            return None
+
+    def interrupt(self) -> tuple[int, str]:
+        """Ctrl-C: the exit code and what it wrote to stderr."""
+        self.proc.send_signal(signal.SIGINT)
+        code = self.proc.wait(timeout=10)
+        return code, self.proc.stderr.read()
 
 
 @pytest.fixture
