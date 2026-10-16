@@ -85,7 +85,7 @@ def test_the_run_item_and_its_sub_issues_are_fetched_in_one_call(story, command)
     two_task_run(story, pipelines=2)
     story.run(command, "412")
     asked = [c for c in story.calls() if c["method"] == "item"]
-    assert [c["args"] for c in asked] == [["acme/shop", 412]]
+    assert [c["args"] for c in asked] == [["acme/shop", 412, False]], "and no board entries: the project has no board"
 
 
 def test_a_run_shaped_like_run_44_needs_few_calls(story):
@@ -165,13 +165,29 @@ def test_an_item_comes_with_its_sub_issues_relations_and_board_entry(story):
     two_task_run(story)
     story.gh_edit(lambda d: d["issues"]["acme/shop#501"].update(fields={"Signal": "x"}))
     story.reset_calls()
-    tracker = Memo(GhFake(str(story.gh_path)))
+    tracker = Memo(GhFake(str(story.gh_path)), boards=True)
     assert [c["title"] for c in tracker.sub_issues("acme/shop", 412)] == ["Booking API", "Help page"]
     assert [b["number"] for b in tracker.blocked_by("acme/shop", 501)] == [500]
     assert tracker.issue("acme/shop", 501)["title"] == "Help page"
     assert tracker.fields("acme/shop", 501, "acme", 7) == {"Signal": "x"}
     assert tracker.fields("acme/shop", 500, "acme", 7) == {}
-    assert [c["method"] for c in story.calls()] == ["item"]
+    assert asks(story.calls()) == [("item", "acme/shop", 412, True)]
+
+
+def test_board_entries_are_asked_for_only_when_a_board_field_is_read(story):
+    """GitHub refuses a login without the `project` scope the board entries: a project without a board never asks."""
+    two_task_run(story)
+    story.gh_edit(lambda d: d["issues"]["acme/shop#412"].update(fields={"Signal": "x"}))
+    story.reset_calls()
+    tracker = Memo(GhFake(str(story.gh_path)))
+    assert len(tracker.sub_issues("acme/shop", 412)) == 2
+    assert asks(story.calls()) == [("item", "acme/shop", 412, False)]
+    assert tracker.fields("acme/shop", 412, "acme", 7) == {"Signal": "x"}
+    assert tracker.fields("acme/shop", 500, "acme", 7) == {}, "the sub-issues came with it"
+    assert asks(story.calls()) == [("item", "acme/shop", 412, False), ("item", "acme/shop", 412, True)]
+    tracker.forget()
+    tracker.issue("acme/shop", 412)
+    assert asks(story.calls())[-1] == ("item", "acme/shop", 412, True), "from then on the item comes with them"
 
 
 def test_concurrent_callers_share_one_read(story):
@@ -194,6 +210,19 @@ def test_at_most_four_requests_are_in_flight(story):
     [t.start() for t in threads]
     [t.join() for t in threads]
     assert len(story.calls()) == 12
+    assert 2 <= in_flight(story.calls()) <= 4
+
+
+def test_writes_count_toward_the_limit_of_requests_in_flight(story):
+    two_task_run(story)
+    story.delay(0.1)
+    story.reset_calls()
+    tracker = Memo(GhFake(str(story.gh_path)))
+    threads = [threading.Thread(target=tracker.comment, args=("acme/shop", 412, f"c{n}")) for n in range(12)]
+    threads += [threading.Thread(target=tracker.pulls, args=("acme/shop", f"b{n}", "main")) for n in range(6)]
+    [t.start() for t in threads]
+    [t.join() for t in threads]
+    assert len(story.calls()) == 18
     assert 2 <= in_flight(story.calls()) <= 4
 
 
@@ -236,7 +265,8 @@ def test_an_item_that_is_not_on_the_board_yet_is_added_first(story):
         ("add_to_board", 501),
         ("set_field", "acme/shop#501"),
     ]
-    assert [c["method"] for c in reads(calls)] == ["user", "item", "board"], "nothing more read for the extra write"
+    assert [c["method"] for c in reads(calls)] == ["user", "item", "item", "board"], "nothing more for the extra write"
+    assert [c["args"][2] for c in calls if c["method"] == "item"] == [False, True], "board entries when first needed"
     assert gh(story)["issues"]["acme/shop#501"]["fields"] == {"Signal": "blocked: implement-T2 (order T1)"}
 
 
@@ -415,9 +445,15 @@ ITEM = {
 }
 
 
+def used_fragments(query: str) -> None:
+    """GitHub refuses a query that defines a fragment it doesn't spread."""
+    defined = {line.split()[1] for line in query.splitlines() if line.startswith("fragment ")}
+    assert defined == {name for name in defined if f"...{name}" in query}, f"unused fragment in {query}"
+
+
 def test_the_adapter_reads_an_item_with_everything_that_comes_with_it_in_one_request(gh_stub):
     gh_stub.answer({"issue(number": ITEM})
-    tracker = Memo(GhCli())
+    tracker = Memo(GhCli(), boards=True)
     assert tracker.issue("o/r", 412) == {
         "number": 412,
         "id": 412,
@@ -444,6 +480,24 @@ def test_the_adapter_reads_an_item_with_everything_that_comes_with_it_in_one_req
     calls = gh_stub.calls()
     assert len(calls) == 1 and calls[0][:2] == ["api", "graphql"]
     assert "-F" in calls[0] and "number=412" in calls[0]
+    used_fragments(graphql(calls[0]))
+
+
+def test_the_adapter_asks_for_board_entries_only_when_a_board_is_read(gh_stub):
+    """Without the `project` scope GitHub refuses `projectItems`: a factory with no board must not ask for it."""
+    gh_stub.answer({"issue(number": ITEM})
+    tracker = Memo(GhCli())
+    assert tracker.issue("o/r", 412)["title"] == "Extend a booking"
+    assert len(tracker.sub_issues("o/r", 412)) == 1
+    [call] = gh_stub.calls()
+    assert "projectItems" not in graphql(call) and "ProjectV2" not in graphql(call)
+    used_fragments(graphql(call))
+    assert tracker.fields("o/r", 412, "o", 7) == {"State": "Started", "N": "t"}
+    first, second = gh_stub.calls()
+    assert "projectItems" in graphql(second) and "projectItems" not in graphql(first)
+    used_fragments(graphql(second))
+    assert tracker.fields("o/r", 500, "o", 7) == {}, "the sub-issue came with it"
+    assert len(gh_stub.calls()) == 2
 
 
 def test_the_adapter_reads_a_pull_request_with_its_reviews_and_comments_in_one_request(gh_stub):
@@ -459,7 +513,12 @@ def test_the_adapter_reads_a_pull_request_with_its_reviews_and_comments_in_one_r
                     {"databaseId": 4, "state": "APPROVED", "body": None, "submittedAt": "t1", "author": {"login": "a"}}
                 ]
             },
-            "comments": {"nodes": [{"databaseId": 5, "body": "c", "createdAt": "t2", "author": None}]},
+            "comments": {
+                "nodes": [
+                    {"databaseId": 5, "body": "c", "createdAt": "t2", "author": None},
+                    {"databaseId": 6, "body": "d", "createdAt": "t3", "author": {"login": "ci", "__typename": "Bot"}},
+                ]
+            },
         }
 
     nodes = [pull(7, "OPEN", True), pull(3, "MERGED", False), pull(5, "OPEN", False, repo="fork/r")]
@@ -471,7 +530,10 @@ def test_the_adapter_reads_a_pull_request_with_its_reviews_and_comments_in_one_r
         (7, "open", True, "B"),
     ], "oldest first, from a fork left out"
     assert tracker.reviews("o/r", 7) == [{"id": 4, "state": "APPROVED", "body": "", "user": "a", "at": "t1"}]
-    assert tracker.comments("o/r", 7) == [{"id": 5, "body": "c", "user": None, "at": "t2"}]
+    assert tracker.comments("o/r", 7) == [
+        {"id": 5, "body": "c", "user": None, "at": "t2"},
+        {"id": 6, "body": "d", "user": "ci[bot]", "at": "t3"},
+    ], "a bot's login ends in [bot], as REST gives it"
     assert len(gh_stub.calls()) == 1
 
 

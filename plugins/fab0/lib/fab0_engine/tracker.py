@@ -4,11 +4,12 @@ Reads serve the engine; writes serve only `apply`. Two layers:
 
 - a backend makes one request to GitHub per call: `GhCli` through `gh`, or `GhFake` on a JSON file. Its reads ask
   for related things together (an item with its sub-issues, relations and board fields; a pull request with its
-  reviews and comments), and its writes make only write calls;
+  reviews and comments), and its writes make only write calls. Board entries (`projectItems`, which GitHub gives
+  only to a login with the `project` scope) are asked for only when the project has a board;
 - `Memo`, what `make_tracker` returns, is what the engine calls. It answers every read once per evaluation of a
   run (from the answer of a request that held it, when there is one), is safe to call from several threads, and
-  lets at most `MAX_IN_FLIGHT` requests run at once. Nothing it keeps outlives the command (P3): `forget` drops it
-  between the rounds of `apply`, and writes never update it.
+  lets at most `MAX_IN_FLIGHT` requests run at once, reads and writes together. Nothing it keeps outlives the
+  command (P3): `forget` drops it between the rounds of `apply`, and writes never update it.
 
 Set FAB0_GH_FAKE=<file.json> to read and write the facts in a JSON file instead of GitHub (used by the tests):
 
@@ -70,6 +71,11 @@ fragment Relation on Issue {
   databaseId number title state stateReason
   repository { nameWithOwner }
 }
+"""
+
+# The board entries of an item. Only a board needs them, and GitHub refuses `projectItems` to a login without the
+# `project` scope, so a query asks for them only when a board field is read.
+ENTRY = """
 fragment Entry on ProjectV2Item {
   id
   project { number owner { ... on Organization { login } ... on User { login } } }
@@ -84,28 +90,36 @@ fragment Entry on ProjectV2Item {
 }
 """
 
-# an item with its relations and board entries, and its sub-issues with the same
-ITEM_QUERY = (
-    """
+
+def item_query(boards: bool) -> str:
+    """An item with its relations, and its sub-issues with the same; with board entries when `boards`. Every
+    fragment is used, as GitHub requires."""
+    entries = "\n      projectItems(first: 20) { nodes { ...Entry } }" if boards else ""
+    return (
+        """
 query($owner: String!, $repo: String!, $number: Int!) {
   repository(owner: $owner, name: $repo) {
     issue(number: $number) {
       ...Facts
-      blockedBy(first: 100) { nodes { ...Relation } }
-      projectItems(first: 20) { nodes { ...Entry } }
+      blockedBy(first: 100) { nodes { ...Relation } }"""
+        + entries
+        + """
       subIssues(first: 100) {
         nodes {
           ...Facts
-          blockedBy(first: 100) { nodes { ...Relation } }
-          projectItems(first: 20) { nodes { ...Entry } }
+          blockedBy(first: 100) { nodes { ...Relation } }"""
+        + entries.replace("\n      ", "\n          ")
+        + """
         }
       }
     }
   }
 }
 """
-    + FACTS
-)
+        + FACTS
+        + (ENTRY if boards else "")
+    )
+
 
 # the pull requests of a branch with their reviews and conversation comments
 PULLS_QUERY = """
@@ -115,8 +129,8 @@ query($owner: String!, $repo: String!, $head: String!, $base: String!) {
       nodes {
         number state isDraft body
         headRepository { nameWithOwner }
-        reviews(first: 100) { nodes { databaseId state body submittedAt author { login } } }
-        comments(first: 100) { nodes { databaseId body createdAt author { login } } }
+        reviews(first: 100) { nodes { databaseId state body submittedAt author { login __typename } } }
+        comments(first: 100) { nodes { databaseId body createdAt author { login __typename } } }
       }
     }
   }
@@ -155,6 +169,14 @@ def _issue(d: dict, number: int) -> dict:
         "state_reason": d.get("state_reason"),
         "assignees": d.get("assignees", []),
     }
+
+
+def _login(author: dict | None) -> str | None:
+    """A GraphQL author's login as REST gives it: a bot's ends in `[bot]`."""
+    if not author:
+        return None
+    login = author.get("login")
+    return f"{login}[bot]" if login and author.get("__typename") == "Bot" and not login.endswith("[bot]") else login
 
 
 def _nodes(connection: dict | None) -> list:
@@ -216,20 +238,23 @@ class GhCli:
             }
         return boards
 
-    def item(self, repo: str, number: int) -> dict:
-        """An item, its blocked-by items and board entries, and its sub-issues with theirs: one request."""
+    def item(self, repo: str, number: int, boards: bool = False) -> dict:
+        """An item, its blocked-by items and its sub-issues with theirs: one request. With `boards`, each part
+        also has its board entries, which only a login with the `project` scope can read."""
         owner, name = repo.split("/")
-        data = self._graphql(ITEM_QUERY, owner=owner, repo=name, number=number)
+        data = self._graphql(item_query(boards), owner=owner, repo=name, number=number)
         node = (data.get("repository") or {}).get("issue")
         if node is None:
             raise Fail(EXIT_ERROR, f"no issue {repo}#{number}")
 
         def part(n: dict) -> dict:
-            return {
+            found = {
                 "issue": self._from_node(n),
                 "blocked_by": [self._from_node(b) for b in _nodes(n.get("blockedBy"))],
-                "boards": self._entries(_nodes(n.get("projectItems"))),
             }
+            if boards:
+                found["boards"] = self._entries(_nodes(n.get("projectItems")))
+            return found
 
         found = part(node)
         found["issue"].pop("repo")
@@ -288,7 +313,7 @@ class GhCli:
                             "id": r["databaseId"],
                             "state": r["state"],
                             "body": r.get("body") or "",
-                            "user": (r.get("author") or {}).get("login"),
+                            "user": _login(r.get("author")),
                             "at": r.get("submittedAt"),
                         }
                         for r in _nodes(d.get("reviews"))
@@ -297,7 +322,7 @@ class GhCli:
                         {
                             "id": c["databaseId"],
                             "body": c.get("body") or "",
-                            "user": (c.get("author") or {}).get("login"),
+                            "user": _login(c.get("author")),
                             "at": c.get("createdAt"),
                         }
                         for c in _nodes(d.get("comments"))
@@ -434,13 +459,12 @@ class GhFake:
         r, n = ref.split("#")
         return {**_issue(self._raw(r, int(n)), int(n)), "repo": r}
 
-    def _part(self, ref: str) -> dict:
+    def _part(self, ref: str, boards: bool) -> dict:
         raw = self._raw(ref.split("#")[0], int(ref.split("#")[1]))
-        return {
-            "issue": self._ref(ref),
-            "blocked_by": [self._ref(b) for b in raw.get("blocked_by", [])],
-            "boards": {"*": {"item": ref, "fields": raw["fields"]}} if "fields" in raw else {},
-        }
+        found = {"issue": self._ref(ref), "blocked_by": [self._ref(b) for b in raw.get("blocked_by", [])]}
+        if boards:
+            found["boards"] = {"*": {"item": ref, "fields": raw["fields"]}} if "fields" in raw else {}
+        return found
 
     # ------------------------------------------------------------ reads
 
@@ -449,12 +473,12 @@ class GhFake:
         return self.data["user"]
 
     @_logged
-    def item(self, repo: str, number: int) -> dict:
+    def item(self, repo: str, number: int, boards: bool = False) -> dict:
         self._raw(repo, number)
-        found = self._part(f"{repo}#{number}")
+        found = self._part(f"{repo}#{number}", boards)
         found["issue"].pop("repo")
         children = self._raw(repo, number).get("sub_issues", [])
-        return {**found, "sub_issues": [self._part(ref) for ref in children]}
+        return {**found, "sub_issues": [self._part(ref, boards) for ref in children]}
 
     @_logged
     def open_items(self, repo: str, label: str | None, issue_type: str | None) -> list[int]:
@@ -652,12 +676,14 @@ class Memo:
     `fields` of the item and of its sub-issues; `pulls` answers `pull`, `reviews` and `comments` of its pull
     requests. Returned values are copies, so no caller changes what another reads."""
 
-    def __init__(self, backend):
+    def __init__(self, backend, boards: bool = False):
+        """`boards`: the project has a board, so reads of an item ask for its board entries from the start."""
         self.backend = backend
         self._lock = threading.Lock()
         self._cells: dict[tuple, _Cell] = {}
         self._added: dict[tuple, str] = {}
         self._slots = threading.BoundedSemaphore(MAX_IN_FLIGHT)
+        self._boards = boards  # whether item reads ask for board entries
 
     def forget(self) -> None:
         """Drop what was read, for the next round of `apply`. A board's layout is no answer to anything the
@@ -708,15 +734,21 @@ class Memo:
     def open_items(self, repo: str, label: str | None, issue_type: str | None) -> list[int]:
         return copy.deepcopy(self._read("open_items", repo, label, issue_type))
 
-    def _item(self, repo: str, number: int) -> dict:
-        def fetch() -> dict:
-            found = self._call("item", repo, number)
-            for child in found["sub_issues"]:
-                issue = child["issue"]
-                self._seed(("item", issue["repo"], issue["number"]), {**child, "issue": _without(issue, "repo")})
-            return found
+    def _read_item(self, repo: str, number: int, boards: bool) -> dict:
+        """One request for an item and its sub-issues, whose answers also serve each sub-issue's own reads."""
+        found = self._call("item", repo, number, boards)
+        if boards:
+            self._seed(("boards", repo, number), found["boards"])
+        for child in found["sub_issues"]:
+            issue = child["issue"]
+            where = (issue["repo"], issue["number"])
+            if boards:
+                self._seed(("boards", *where), child["boards"])
+            self._seed(("item", *where), {"issue": _without(issue, "repo"), "blocked_by": child["blocked_by"]})
+        return found
 
-        return self._once(("item", repo, number), fetch)
+    def _item(self, repo: str, number: int) -> dict:
+        return self._once(("item", repo, number), lambda: self._read_item(repo, number, self._boards))
 
     def issue(self, repo: str, number: int) -> dict:
         return copy.deepcopy(self._item(repo, number)["issue"])
@@ -724,7 +756,7 @@ class Memo:
     def sub_issues(self, repo: str, number: int) -> list[dict]:
         found = self._item(repo, number)
         if "sub_issues" not in found:  # an item that came with its parent's read
-            found = self._once(("item+", repo, number), lambda: self._call("item", repo, number))
+            found = self._once(("item+", repo, number), lambda: self._read_item(repo, number, self._boards))
         return copy.deepcopy([c["issue"] for c in found["sub_issues"]])
 
     def blocked_by(self, repo: str, number: int) -> list[dict]:
@@ -732,7 +764,14 @@ class Memo:
         return copy.deepcopy(self._item(repo, number)["blocked_by"])
 
     def _board_entry(self, repo: str, number: int, owner: str, project: int) -> dict | None:
-        boards = self._item(repo, number)["boards"]
+        """The item's place on the board. Board entries are asked for when a board field is first read, and from
+        then on with every read of an item: a factory without a board never asks, and needs no `project` scope."""
+
+        def fetch() -> dict:
+            self._boards = True
+            return self._read_item(repo, number, True)["boards"]
+
+        boards = self._once(("boards", repo, number), fetch)
         return boards.get(f"{owner}/{project}", boards.get("*"))
 
     def fields(self, repo: str, number: int, owner: str, project: int) -> dict:
@@ -778,31 +817,32 @@ class Memo:
     def board(self, owner: str, project: int) -> dict:
         return self._read("board", owner, project)
 
-    # ------------------------------------------------------------ writes: write calls only, no update of what was read
+    # ------------------------------------------------------------ writes: write calls only, no update of what was read.
+    # They pass `_call` too, so at most MAX_IN_FLIGHT requests run at once, reads and writes together.
 
     def create_issue(self, repo: str, title: str, body: str, issue_type: str | None) -> dict:
-        return self.backend.create_issue(repo, title, body, issue_type)
+        return self._call("create_issue", repo, title, body, issue_type)
 
     def add_sub_issue(self, repo: str, parent: int, child: dict) -> None:
-        self.backend.add_sub_issue(repo, parent, child)
+        self._call("add_sub_issue", repo, parent, child)
 
     def add_blocked_by(self, repo: str, number: int, blocker_repo: str, blocker: int, blocker_id: int | None = None):
         """`blocker_id` is the blocker's id, as the read or the write that made it gave it."""
         if blocker_id is None:
             blocker_id = self.issue(blocker_repo, blocker)["id"]
-        self.backend.add_blocked_by(repo, number, blocker_repo, blocker, blocker_id)
+        self._call("add_blocked_by", repo, number, blocker_repo, blocker, blocker_id)
 
     def edit_labels(self, repo: str, number: int, add: list, remove: list) -> None:
-        self.backend.edit_labels(repo, number, add, remove)
+        self._call("edit_labels", repo, number, add, remove)
 
     def assign(self, repo: str, number: int, users: list) -> None:
-        self.backend.assign(repo, number, users)
+        self._call("assign", repo, number, users)
 
     def comment(self, repo: str, number: int, body: str) -> None:
-        self.backend.comment(repo, number, body)
+        self._call("comment", repo, number, body)
 
     def close(self, repo: str, number: int) -> None:
-        self.backend.close(repo, number)
+        self._call("close", repo, number)
 
     def set_field(self, repo: str, number: int, owner: str, project: int, field: str, value) -> None:
         """Set a board field: one write when the item is on the board, two when it isn't (it is added first). The
@@ -814,16 +854,16 @@ class Memo:
         with self._lock:
             item = (entry or {}).get("item") or self._added.get(key)
         if item is None:
-            item = self.backend.add_to_board(repo, number, owner, project)
+            item = self._call("add_to_board", repo, number, owner, project)
             with self._lock:
                 self._added[key] = item
-        self.backend.set_field(board, item, plan, value)
+        self._call("set_field", board, item, plan, value)
 
     def create_pr(self, repo: str, head: str, base: str, title: str, body: str, draft: bool) -> int:
-        return self.backend.create_pr(repo, head, base, title, body, draft)
+        return self._call("create_pr", repo, head, base, title, body, draft)
 
     def ready_pr(self, repo: str, number: int) -> None:
-        self.backend.ready_pr(repo, number)
+        self._call("ready_pr", repo, number)
 
     def note_merged(self, repo: str, head: str, base: str) -> None:
         """Only the fake needs telling that a pull request merged: GitHub does it itself."""
@@ -835,6 +875,9 @@ def _without(d: dict, key: str) -> dict:
     return {k: v for k, v in d.items() if k != key}
 
 
-def make_tracker() -> Memo:
+def make_tracker(boards: bool = False) -> Memo:
+    """The tracker the engine reads. Pass `boards=True` when the project has a board (`tracker.project` or a
+    field is configured): the run's item then comes with its board entries in the one request. Without it, a
+    board field read asks for them in a second request, and a factory with no board never asks."""
     fake = os.environ.get("FAB0_GH_FAKE")
-    return Memo(GhFake(fake) if fake else GhCli())
+    return Memo(GhFake(fake) if fake else GhCli(), boards)
