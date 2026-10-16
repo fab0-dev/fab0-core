@@ -24,13 +24,21 @@ A pipeline whose steps write no files keeps its ledger on `ledger.branch` (D18),
 The tracker's relations are dependencies too (P11, D49). A foreach element's item is the sub-issue
 `tracker.child.sync` made for it; once it exists, its blocked-by relations replace the element's `after`.
 Blocked-by relations of the run's item hold back the whole run, and its other sub-issues hold back its end.
+
+The tracker is read once per evaluation, and what is independent is read at the same time. While `evaluate` walks
+the pipeline, a scout walks it too, assuming every action and unit it passes is done, and starts on threads the
+reads of each unit that has a record: its inputs' pull requests, its required checks. The walk itself stays
+sequential, so the units, their states and their order are what they were; it finds those answers already read, or
+waits on the same read, since `Memo` shares one read between its callers. The scout only reads. What it guesses
+wrong costs a read nobody needs, and a failure it meets is the evaluation's to meet again.
 """
 
 from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass, field
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 import yaml
@@ -42,6 +50,7 @@ from .git import Repo
 from .hashing import sha_json
 from .ledger import DEFAULT_PATH, attempts, entry_name, gate_attempts, parse, seconds_between, took
 from .templates import Unresolved
+from .tracker import MAX_IN_FLIGHT
 from .wiring import EXECUTORS, Wiring, base_allowed
 
 ELEMENT_KEYS = ("id", "title", "repo", "after", "paths")
@@ -231,7 +240,34 @@ class Run:
 
     def evaluate(self) -> dict:
         """Every unit and its state; and the run's: `units` while work is left, `waiting` for the merge of the
-        run's pull request, `done`."""
+        run's pull request, `done`. The tracker reads it needs are started ahead, on threads (see the top)."""
+        if self.tracker is None:
+            return self.walk_run()
+        pool = ThreadPoolExecutor(MAX_IN_FLIGHT + 1, thread_name_prefix="fab0-read")  # the scout, and four reads
+        try:
+            pool.submit(quietly, self.item)  # the run's item is read whatever the pipeline is
+            pool.submit(quietly, Scout(self, pool).scout)
+            return self.walk_run()
+        finally:  # what was started and isn't needed is dropped; what is under way is awaited
+            pool.shutdown(wait=True, cancel_futures=True)
+
+    def gather(self, calls: list) -> list:
+        """The results of independent calls, in the order given, made at the same time. Every one is made; the
+        first failure in the order given is raised, as a loop would have raised it. The tracker adapter lets at
+        most `MAX_IN_FLIGHT` requests out at once, whatever the number of threads."""
+        if len(calls) < 2:
+            return [call() for call in calls]
+        with ThreadPoolExecutor(min(len(calls), MAX_IN_FLIGHT)) as pool:
+            futures = [pool.submit(call) for call in calls]
+        return [f.result() for f in futures]
+
+    def warm(self, unit: Unit) -> None:
+        """What `state` reads from the tracker for a unit with a record, without keeping its state: for the scout."""
+        self.load_latest(unit)
+        if unit.latest:  # a unit without a record reads files only
+            self.settle(unit)
+
+    def walk_run(self) -> dict:
         out = {"ok": True, "run": self.run, "pipeline": self.name}
         ctx = Ctx(parent=self.run_branch)
         if self.recorded():  # started: what onStart did may be undone on purpose, by onEnd or a person (D53)
@@ -843,6 +879,10 @@ class Run:
 
     def state(self, unit: Unit) -> None:
         self.load_latest(unit)
+        self.settle(unit)
+
+    def settle(self, unit: Unit) -> None:
+        """The state of a unit whose records are loaded."""
         entry = unit.latest
         if entry:
             rework = self.rework(unit, entry)
@@ -970,15 +1010,17 @@ class Run:
         return found
 
     def failing_checks(self, unit: Unit) -> dict[str, list[str]]:
-        found = {}
-        for name in dict.fromkeys(unit.write or [unit.ledger_repo]):
+        def failing(name: str) -> tuple[str, list[str]] | None:
             repo = self.repos[name]
             pr = self.tracker.pull(repo.github, unit.branch, self.parent_in(repo, unit.ctx.parent))
             if pr is not None and pr["state"] == "open":
                 state, failed = self.tracker.checks(repo.github, pr["number"])
                 if state == "fail":
-                    found[f"{repo.github}#{pr['number']}"] = failed
-        return found
+                    return f"{repo.github}#{pr['number']}", failed
+            return None
+
+        names = dict.fromkeys(unit.write or [unit.ledger_repo])  # one repository's checks don't wait on another's
+        return dict(f for f in self.gather([lambda n=n: failing(n) for n in names]) if f)
 
     def rework(self, unit: Unit, entry: dict) -> dict:
         """Why the recorded attempt no longer stands: its checks failed, its inputs changed, or an output it
@@ -1139,3 +1181,35 @@ class Run:
                     continue
                 per_step[key] = per_step.get(key, 0) + 1
             count += 1
+
+
+def quietly(call, *args) -> None:
+    """A speculative read: a failure of it is the evaluation's to meet when it reads the same thing."""
+    try:
+        call(*args)
+    except Exception:
+        pass
+
+
+class Scout(Run):
+    """A walk of a run's steps that decides nothing: it assumes every action and unit it passes is done, and for
+    each unit starts, on the pool, the reads that settling it would make. It has no tracker, so it never reads
+    itself, and a unit that needs the run's item (a tracker condition, a foreach's sub-issues) is walked as the
+    evaluation would walk it without one. What it starts is read once: the evaluation's own read of the same
+    thing waits for it."""
+
+    def __init__(self, run: Run, pool: ThreadPoolExecutor):
+        super().__init__(run.w, run.name, run.run, run.actor, None)
+        self.real, self.pool = run, pool
+
+    def scout(self) -> None:
+        self.walk(self.p["steps"], Ctx(parent=self.run_branch), True, None)
+
+    def action_state(self, unit: Unit) -> bool:
+        unit.state, unit.reason = "done", None
+        return True
+
+    def state(self, unit: Unit) -> None:
+        unit.state, unit.reason = "done", None
+        # a copy: settling it sets its state, attempt and history, which are the evaluation's to set
+        self.pool.submit(quietly, self.real.warm, replace(unit, history=[], gates={}))  # raises once evaluate is over

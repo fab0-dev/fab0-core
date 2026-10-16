@@ -27,6 +27,7 @@ from .schemas import load_schema, resolve_schema_ref, schema_errors
 from .templates import Unresolved, render
 
 REVIEW_STATES = ("CHANGES_REQUESTED", "COMMENTED")
+TRACKED = ("issue", "pr")  # the kinds of artifact that are read from the tracker
 INLINE_LIMIT = 64 * 1024  # text up to this size goes in a brief, so agents need no git to read it
 
 
@@ -198,10 +199,14 @@ def view(run, name: str, ctx, unit=None) -> View:
 
 def input_hashes(run, unit) -> dict[str, str]:
     """The hash of every input that exists now; the ledger keeps them, and a change makes the unit stale."""
+    names = unit.step.get("inputs", [])
+    # the tracker's artifacts are read at the same time, the others as they come: the order of the result is the same
+    tracked = [n for n in names if not n.startswith("unit") and run.w.artifacts[n]["kind"] in TRACKED]
+    seen = dict(zip(tracked, run.gather([lambda n=n: view(run, n, unit.ctx, unit) for n in tracked]), strict=True))
     hashes = {}
-    for name in unit.step.get("inputs", []):
+    for name in names:
         key = "unit" if name.startswith("unit") else name
-        h = view(run, name, unit.ctx, unit).hash
+        h = (seen[name] if name in seen else view(run, name, unit.ctx, unit)).hash
         if h is not None:
             hashes[key] = h
     return hashes
