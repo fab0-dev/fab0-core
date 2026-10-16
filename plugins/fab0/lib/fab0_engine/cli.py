@@ -2,8 +2,10 @@
 
   validate              check the project's .fab0/ wiring (schema 2)
   status RUN            every unit of a run and its state; read-only
-  next RUN              the same, and a hand-out for every unit that is ready or running
-  record RUN UNIT       check a unit's result, or with --gate its gate's, and write the ledger entry
+  next RUN              the same, and a hand-out for every unit that is ready or running; with --apply, after
+                        performing what is due, from the same pass over the tracker
+  record RUN UNIT       check a unit's result, or with --gate its gate's, and write the ledger entry; reads
+                        no tracker (at most the run's item, to pick the pipeline)
   --version             the fab0 release of this engine
 
   apply RUN             perform what is due: actions, merges, pull requests (writes git and the tracker)
@@ -21,14 +23,15 @@ import subprocess
 from pathlib import Path
 
 from .apply import apply as apply_run
+from .apply import settle
 from .errors import EXIT_ERROR, EXIT_INVALID, EXIT_OK, EXIT_REFUSED, EXIT_USAGE, Fail
 from .gates import gate_handout, record_gate, save_gate_pending
 from .handout import action_handout, claim, handout, record, save_pending
 from .inbox import inbox
-from .schedule import Run
+from .schedule import Run, Unit
 from .tracker import make_tracker
 from .version import check_engine, read_version
-from .wiring import Wiring
+from .wiring import READ_ONLY_KINDS, Wiring
 
 RUN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
@@ -151,13 +154,99 @@ def pick_pipeline(wiring: Wiring, run: str, asked: str | None, tracker) -> str:
     raise Fail(EXIT_USAGE, f"run {run}: pass --pipeline; {which}", pipelines=names)
 
 
+class NoTracker:
+    """A tracker that answers every read with nothing, and has no writes. `record` evaluates the run against
+    it: the unit and its context come from git and its saved hand-out, and nothing it checks is on the
+    tracker."""
+
+    def user(self) -> str:
+        return ""
+
+    def open_items(self, repo, label, issue_type) -> list:
+        return []
+
+    def issue(self, repo, number):
+        return None
+
+    def sub_issues(self, repo, number) -> list:
+        return []
+
+    def blocked_by(self, repo, number) -> list:
+        return []
+
+    def fields(self, repo, number, owner, project) -> dict:
+        return {}
+
+    def comments(self, repo, number) -> list:
+        return []
+
+    def pulls(self, repo, branch, base) -> list:
+        return []
+
+    def pull(self, repo, branch, base):
+        return None
+
+    def reviews(self, repo, number) -> list:
+        return []
+
+    def diff(self, repo, number) -> str:
+        return ""
+
+    def checks(self, repo, number) -> tuple[str, list]:
+        return "pass", []
+
+    def board(self, owner, project) -> dict:
+        return {"id": None, "fields": None}
+
+    def forget(self) -> None:
+        pass
+
+
+class OfflineRun(Run):
+    """A run evaluated without the tracker, for `record`. Its units and their contexts come from git; their
+    states aren't to be trusted, and `record` asks only that the unit is there. Two things the tracker alone
+    decides would make later units drop out of the run, so they are taken as they were when the unit was
+    handed out:
+    - a block's onStart actions (a foreach's sub-issues) are done: the unit couldn't have been handed out else;
+    - an input read from the tracker (an issue, a pull request, a tool) hashes to nothing here, so it can't
+      tell a recorded attempt from a stale one: it is left out of that check.
+
+    A unit behind a `when` on the tracker is still missing: `online` makes the run that reads it."""
+
+    online = None
+
+    def action_state(self, unit: Unit) -> bool:
+        if unit.lifecycle == "onStart":
+            unit.state, unit.reason = "done", None
+            return True
+        return super().action_state(unit)
+
+    def rework(self, unit: Unit, entry: dict) -> dict:
+        why = super().rework(unit, entry)
+        if "stale" in why:
+            stale = [k for k in why["stale"] if self.w.artifacts.get(k, {}).get("kind") not in READ_ONLY_KINDS]
+            if stale:
+                why["stale"] = stale
+            else:
+                del why["stale"]
+                if set(why) <= {"previous"}:
+                    return {}
+        return why
+
+
 def load_run(args) -> Run:
     wiring = load_wiring(args)
     if not RUN_ID.match(args.run):
         raise Fail(EXIT_USAGE, f"run id '{args.run}': letters, digits, . _ - only")
-    tracker = make_tracker()  # read-only: issue and pull request facts, from gh or FAB0_GH_FAKE
+    tracker = make_tracker()  # issue and pull request facts, from gh or FAB0_GH_FAKE
     pipeline = pick_pipeline(wiring, args.run, args.pipeline, tracker)
-    run = Run(wiring, pipeline, args.run, actor(args, tracker) if args.command != "status" else "", tracker)
+    if args.command == "record":
+        # past the pick, `record` reads nothing: no tracker call, not even who is running
+        run = OfflineRun(wiring, pipeline, args.run, "", NoTracker())
+        run.online = lambda: Run(wiring, pipeline, args.run, "", tracker)
+    else:
+        quiet = args.command == "status"
+        run = Run(wiring, pipeline, args.run, "" if quiet else actor(args, tracker), tracker)
     if not run.home.exists():
         raise Fail(EXIT_ERROR, f"the home repo {run.home.path} is not a git repository")
     return run
@@ -167,12 +256,12 @@ def cmd_status(args) -> dict:
     return load_run(args).evaluate()
 
 
-def cmd_next(args) -> dict:
-    run = load_run(args)
-    result = run.evaluate()
+def hand_out(run: Run, only: str | None) -> list[dict]:
+    """A hand-out for every unit that is ready or running (a gate, for a unit that waits on one), in the run's
+    order; claims what it hands out."""
     handouts = []
     for unit in run.units:
-        if args.unit and unit.id != args.unit:
+        if only and unit.id != only:
             continue
         if unit.step is not None and "action" in unit.step:
             if unit.state == "ready":
@@ -188,9 +277,27 @@ def cmd_next(args) -> dict:
             out = gate_handout(run, unit)
             save_gate_pending(run, unit, out)
             handouts.append(out)
+    return handouts
+
+
+def cmd_next(args) -> dict:
+    run = load_run(args)
+    if args.apply:
+        # `apply` for every unit, whatever --unit says: it limits only the hand-outs. Then hand out from the
+        # evaluation `apply` ended with, which is one pass over the tracker.
+        run, result = settle(run)
+        handouts = hand_out(run, args.unit) if result["kind"] == "units" else []
+    else:
+        result = run.evaluate()
+        handouts = hand_out(run, args.unit)
     if args.unit and not handouts:
         found = next((u.summary() for u in run.units if u.id == args.unit), None)
-        raise Fail(EXIT_REFUSED, f"{args.unit} is not ready", unit=found)
+        raise Fail(
+            EXIT_REFUSED,
+            f"{args.unit} is not ready",
+            unit=found,
+            **({"applied": result["applied"]} if args.apply else {}),
+        )
     result["units"] = [u.summary() for u in run.units]  # claims made just now may have changed a state
     return {**result, "handouts": handouts}
 
@@ -204,6 +311,10 @@ def cmd_record(args) -> dict:
         except (OSError, ValueError) as exc:
             raise Fail(EXIT_USAGE, f"--return {args.return_file}: {exc}") from None
     run.evaluate()
+    if not args.gate and not any(u.id == args.unit for u in run.units):
+        # a unit behind a condition only the tracker can decide isn't in the run without it: read the tracker
+        run = run.online()
+        run.evaluate()
     if args.gate:
         output = Path(args.output).read_text(errors="replace") if args.output else None
         return record_gate(run, args.unit, returned, args.exit, output)
@@ -242,6 +353,11 @@ def main(argv: list[str] | None = None) -> int:
     run_parser("status", "every unit of a run and its state; read-only").set_defaults(handler=cmd_status)
     p = run_parser("next", "the run's units, and a hand-out for each one that is ready")
     p.add_argument("--unit", help="hand out only this unit")
+    p.add_argument(
+        "--apply",
+        action="store_true",
+        help="perform what is due first, as `apply` does, then hand out from the same read",
+    )
     p.set_defaults(handler=cmd_next)
     p = run_parser("apply", "perform the run's due actions, merges and pull requests")
     p.add_argument("--unit", help="only this unit")
