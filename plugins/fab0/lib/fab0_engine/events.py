@@ -16,6 +16,8 @@ import json
 import os
 from pathlib import Path
 
+import jsonschema
+
 from .ledger import now
 from .schedule import Run
 from .schemas import core_schema, schema_errors
@@ -35,13 +37,15 @@ def read_events(path: Path) -> list[dict]:
         data = path.read_bytes()
     except OSError:
         return []
+    schema = core_schema("event")
+    validator = jsonschema.Draft202012Validator(schema)  # once per read, not once per line
     found = []
     for raw in data.split(b"\n")[:-1]:  # what follows the last newline is not a complete line
         try:
             event = json.loads(raw)
         except ValueError:
             continue
-        if isinstance(event, dict) and not schema_errors(event, core_schema("event")):
+        if isinstance(event, dict) and not schema_errors(event, schema, validator):
             found.append(event)
     return found
 
@@ -91,13 +95,6 @@ def apply_text(entry: dict) -> tuple[str, str | None]:
     else:
         said = next(entry[k] for k in ("merge", "pull", "sync") if k in entry)
     return f"apply: {unit}: {said}", unit
-
-
-def subject(event: dict) -> tuple[str, str]:
-    """What an `apply` event is about: its unit, or else its item or the ledger."""
-    if event.get("unit"):
-        return "unit", event["unit"]
-    return "other", event["line"].split(": ")[1] if event["line"].count(": ") > 1 else event["line"]
 
 
 class EventLog:
@@ -152,21 +149,21 @@ class EventLog:
         )
 
     def applied(self, applied: list[dict]) -> None:
-        """One event per entry of `apply`'s `applied`, in order, except an entry that repeats the last event
-        about the same unit, item or ledger: `apply` reports a merge that waits for checks every time."""
+        """One event per entry of `apply`'s `applied`, in order, except a unit's entry that repeats the last
+        `apply` event of that unit: `apply` reports a merge that waits for checks every time. An item's or a
+        ledger push is a new action each time, and is always logged."""
         if not applied:
             return
-        last: dict[tuple[str, str], str] = {}
+        last: dict[str, str] = {}
         for event in self.existing():
-            if event["kind"] == "apply":
-                last[subject(event)] = event["line"]
+            if event["kind"] == "apply" and event.get("unit"):
+                last[event["unit"]] = event["line"]
         for entry in applied:
             line, unit = apply_text(entry)
-            key = subject({"unit": unit, "line": line})
-            if last.get(key) == line:
+            if unit and last.get(unit) == line:
                 continue
-            if self.add("apply", line, unit=unit):
-                last[key] = line
+            if self.add("apply", line, unit=unit) and unit:
+                last[unit] = line
 
     def states(self, result: dict) -> None:
         """The units that wait on a person or are blocked by a signal, and the run waiting for the merge of its
