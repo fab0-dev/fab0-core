@@ -137,6 +137,17 @@ def test_apply_logs_one_event_per_entry_in_order(story):
     assert events(story) == before, "an apply that did nothing adds no apply event"
 
 
+def test_next_apply_logs_what_it_applied_then_each_hand_out(story):
+    res = story.run("next", "412", "--apply")
+    spec = handouts(res)["spec"]
+    assert [(e["kind"], e["line"]) for e in events(story)] == [
+        ("apply", "apply: onStart-1: git.run-branch: created fab0/412/base in home, backend"),
+        ("apply", "apply: onStart-2: pr.open-run: opened acme/shop#1"),
+        ("apply", "apply: onStart-3: tracker.field: set State to Started"),
+        ("handout", spec["line"]),
+    ]
+
+
 def test_apply_logs_a_pull_request_and_a_merge(story):
     spec_done(story)
     story.run("apply", "412")

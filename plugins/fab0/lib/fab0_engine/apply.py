@@ -133,14 +133,16 @@ def sync_children(run: Run, unit: Unit, args: dict) -> str:
         body = f"{element['id']} of run {run.run} ({run.name})."
         child = gh.create_issue(home, title, body, args.get("type"))
         gh.add_sub_issue(home, int(run.run), child)
-        items[element["id"]] = {"repo": home, "number": child["number"]}
+        items[element["id"]] = {"repo": home, "number": child["number"], "id": child["id"]}
         made.append(element["id"])
     linked = []
     for element in elements:
         for dep in element["after"]:
             if dep in items and (element["id"] in made or dep in made):
                 blocked, blocker = items[element["id"]], items[dep]
-                gh.add_blocked_by(blocked["repo"], blocked["number"], blocker["repo"], blocker["number"])
+                gh.add_blocked_by(
+                    blocked["repo"], blocked["number"], blocker["repo"], blocker["number"], blocker.get("id")
+                )
                 linked.append(f"#{blocked['number']} after #{blocker['number']}")
     did = f"created {', '.join('#' + str(items[i]['number']) for i in made)}"
     return did + (f"; {', '.join(linked)}" if linked else "")
@@ -335,10 +337,14 @@ def signals(run: Run, result: dict) -> list[tuple[str, str]]:
     return changed
 
 
-def apply(run: Run, only: str | None = None) -> dict:
+def settle(run: Run, only: str | None = None) -> tuple[Run, dict]:
+    """Perform what is due, round after round. A round evaluates the run from one read of the tracker; the next
+    reads it again, since the last one changed something. Returns the run as its last round evaluated it, with
+    its units, and the result: that evaluation and what was applied. A caller that goes on to hand out units
+    (`next --apply`) uses that evaluation, so the round costs one pass over the tracker."""
     applied: list[dict] = []
     try:
-        return settle(run, only, applied)
+        return rounds(run, only, applied)
     except Fail as fail:  # what was done before it stopped is logged too
         warnings = log_events(run, applied) if applied and "applied" not in fail.payload else []
         if warnings:
@@ -346,7 +352,7 @@ def apply(run: Run, only: str | None = None) -> dict:
         raise
 
 
-def settle(run: Run, only: str | None, applied: list[dict]) -> dict:
+def rounds(run: Run, only: str | None, applied: list[dict]) -> tuple[Run, dict]:
     for _ in range(ROUNDS):
         result = run.evaluate()
         progress = False
@@ -385,8 +391,9 @@ def settle(run: Run, only: str | None, applied: list[dict]) -> dict:
             warnings = log_events(run, applied, result)  # a log that can't be written is a warning, nothing more
             if warnings:
                 out["warnings"] = [*result.get("warnings", []), *warnings]
-            return out
-        run = Run(run.w, run.name, run.run, run.actor, run.tracker)  # read everything again
+            return run, out
+        run.tracker.forget()  # what changed is read again, not answered from the round before
+        run = Run(run.w, run.name, run.run, run.actor, run.tracker)
     warnings = log_events(run, applied)
     raise Fail(
         EXIT_ERROR,
@@ -394,3 +401,8 @@ def settle(run: Run, only: str | None, applied: list[dict]) -> dict:
         applied=applied,
         **({"warnings": warnings} if warnings else {}),
     )
+
+
+def apply(run: Run, only: str | None = None) -> dict:
+    """What `settle` did, as `apply` prints it."""
+    return settle(run, only)[1]

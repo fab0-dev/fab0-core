@@ -26,6 +26,29 @@ STORY_GH = {
 }
 
 
+def reads(calls: list[dict]) -> list[dict]:
+    """The calls of the fake tracker that read."""
+    from fab0_engine.tracker import WRITES
+
+    return [c for c in calls if c["method"] not in WRITES]
+
+
+def writes(calls: list[dict]) -> list[dict]:
+    from fab0_engine.tracker import WRITES
+
+    return [c for c in calls if c["method"] in WRITES]
+
+
+def in_flight(calls: list[dict]) -> int:
+    """The most calls that were under way at the same time."""
+    edges = sorted([(c["start"], 1) for c in calls] + [(c["end"], -1) for c in calls], key=lambda e: (e[0], e[1]))
+    most = now = 0
+    for _, step in edges:  # a call that ends as another starts doesn't overlap it
+        now += step
+        most = max(most, now)
+    return most
+
+
 def git(path: Path, *args: str, check: bool = True) -> str:
     run = subprocess.run(["git", "-C", str(path), *args], capture_output=True, text=True)
     assert run.returncode == 0 or not check, f"git {' '.join(args)}: {run.stderr}"
@@ -77,6 +100,19 @@ class Factory:
         data = json.loads(self.gh_path.read_text())
         change(data)
         self.gh_path.write_text(json.dumps(data))
+
+    def calls(self) -> list[dict]:
+        """What the fake tracker was asked since `reset_calls`, in the order the calls ended: one request each,
+        as {"method", "args", "start", "end"}."""
+        log = Path(f"{self.gh_path}.calls")
+        return [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
+
+    def reset_calls(self) -> None:
+        Path(f"{self.gh_path}.calls").unlink(missing_ok=True)
+
+    def delay(self, seconds: float) -> None:
+        """Every call of the fake tracker takes this long."""
+        self.gh_edit(lambda d: d.update(delay=seconds))
 
     def merge(self, repo: str, branch: str, into: str) -> None:
         """What merging a pull request does: `branch` into `into`, with the checkout left where it was."""

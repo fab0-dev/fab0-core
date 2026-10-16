@@ -219,6 +219,11 @@ def test_apply_says_how_to_follow_the_run(story):
     assert story.run("apply", "412")["follow"] == res["follow"]
 
 
+def test_next_apply_says_how_to_follow_the_run_too(story):
+    assert story.run("next", "412", "--apply")["follow"] == story.run("apply", "412")["follow"]
+    assert "follow" not in story.run("next", "412"), "only the command that applies says it"
+
+
 def test_the_follow_command_quotes_its_paths(factory, tmp_path):
     f = factory("story")
     spaced = tmp_path / "my shop"

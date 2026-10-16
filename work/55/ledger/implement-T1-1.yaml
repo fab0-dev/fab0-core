@@ -1,0 +1,94 @@
+step: implement
+attempt: 1
+executor: agent
+actor: eugenefurs
+branch: fab0/55/implement-T1
+unit: T1
+model: sonnet
+base:
+  branch: fab0/55/base
+  sha: 44a27cc573e5a562ca1e7658c747d246f16d1047
+inputs:
+  spec: sha256:d88b5b57cce2b7b09e56c30934de429032ced3cc864fb617127d1baa6ca66d40
+  tasks: sha256:c4e8d973b1dfc582f226f234d70b1969635e1013e0fc4b49dfe03993573b062d
+  unit: sha256:d1839eb59251cb684c5215f503b7bf1c483d7a3e458d5bfe48cfbb1fde7c820b
+  reviews: sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945
+claims:
+- core:plugins/fab0/lib/fab0_engine/tracker.py
+- core:plugins/fab0/lib/fab0_engine/apply.py
+- core:tests/test_tracker.py
+- core:tests/conftest.py
+gate:
+  type: auto
+summary: "T1 is implemented in the four listed files. `uv run pytest` passes (275\
+  \ tests: the 249 that were there plus 26 new), and `uv run ruff check` and `ruff\
+  \ format` are clean. I did not run `claude plugin validate`. The GraphQL queries\
+  \ for the real adapter are untested against GitHub, because I must not run `gh`.\
+  \ Their answers are parsed and tested only against canned JSON from a stubbed `gh`,\
+  \ written from my reading of GitHub's schema. S21 (run 44 measured on the release)\
+  \ will show whether the queries hold up, and the sub-issue, blocked-by and issue-type\
+  \ fields are the ones to check.\n\nWhat changed:\n\n1. `tracker.py` now has two\
+  \ layers.\n   - **Backend** (`GhCli`, `GhFake`): one request per call, with related\
+  \ things asked for together.\n     - `item(repo, n)` returns the issue, its blocked-by\
+  \ items and board entries, and its sub-issues with their own blocked-by items and\
+  \ board entries, in one GraphQL query. It replaces the separate `issue`, `sub_issues`,\
+  \ `blocked_by` and `fields` reads.\n     - `pulls(repo, branch, base)` returns each\
+  \ pull request with its reviews and conversation comments in one query. A pull request\
+  \ from a fork is left out, as the old `head=owner:branch` filter did.\n     - `board(owner,\
+  \ project)` is one query for the board id, its fields and their options.\n     -\
+  \ `comments`, `reviews`, `diff`, `checks`, `open_items` and `user` are as before.\n\
+  \   - **`Memo`**, which `make_tracker()` now returns and the engine calls, has the\
+  \ same public methods as before.\n     - Each read is made once per evaluation.\
+  \ A concurrent caller of the same read waits for the first caller's answer.\n  \
+  \   - `item` answers `issue`, `sub_issues`, `blocked_by` and `fields` for the item\
+  \ and for its sub-issues. `pulls` answers `pull`, `reviews` and `comments` for its\
+  \ pull requests.\n     - Callers get copies. At most 4 backend requests run at once\
+  \ (`MAX_IN_FLIGHT`). `forget()` drops everything except the board layout, so the\
+  \ board is read once per command.\n     - Writes never update the memo.\n\n2. Writes\
+  \ make only write calls.\n   - `add_blocked_by` takes the blocker's id from the\
+  \ read or from `create_issue`, never from a lookup call.\n   - `Memo.set_field`\
+  \ checks the field and option against the board layout before writing anything.\
+  \ It then writes once for an item already on the board (`project item-edit`), and\
+  \ twice for one that is not (`item-add`, then `item-edit`). It adds an item to the\
+  \ board only once per round.\n   - A missing field or option now fails before any\
+  \ write. The messages are `no field X on project owner/N` and `field X on project\
+  \ owner/N has no option 'v'`; the option message now names the board, which it did\
+  \ not before.\n\n3. The fake logs every call (reads and writes) as one JSON line\
+  \ `{method, args, start, end}` to `<FAB0_GH_FAKE file>.calls`, and sleeps `delay`\
+  \ seconds first when the file has that key. It is thread-safe. New fake data keys:\n\
+  \   - `boards: {\"owner/N\": {\"fields\": {name: {\"options\": [...]}}}}` gives\
+  \ a board layout; with no `boards` key every field exists.\n   - An issue is on\
+  \ the board when it has a `fields` key.\n   - `WRITES` in `tracker.py` names the\
+  \ write methods.\n\n4. `apply.py`:\n   - It passes the blocker's id to `add_blocked_by`\
+  \ (created items now carry `id`).\n   - It calls `run.tracker.forget()` before each\
+  \ new round, so round N+1 reads afresh. The first round uses whatever the CLI read\
+  \ before it (the pipeline pick, the user).\n\n5. `conftest.py` has new helpers that\
+  \ T2 and T3 can use:\n   - `Factory.calls()`, `Factory.reset_calls()` and `Factory.delay(seconds)`.\n\
+  \   - Module-level `reads(calls)`, `writes(calls)` and `in_flight(calls)`.\n   -\
+  \ `tests/test_tracker.py` has `two_task_run(f, review=True, pipelines=1|2)`, the\
+  \ S1 scenario, importable as `from test_tracker import two_task_run`.\n\nTests added\
+  \ in `tests/test_tracker.py`:\n- **S1:** no repeated read in `status`, `next`, `apply`\
+  \ and `inbox`, with two pipelines so the run's item picks one.\n- **S2:** exactly\
+  \ one `item` call.\n- **S3:** a status makes fewer than 8 calls (it makes 2).\n\
+  - **S6:** a review added between two `status` runs shows its effect and is read\
+  \ again.\n- **S7:** `apply` makes two `item` reads for two rounds, and round 2 sees\
+  \ the merge.\n- **S8:** the board is read once and each item's field is one `set_field`\
+  \ call.\n- **S9:** an item off the board costs `add_to_board` plus `set_field` and\
+  \ no extra reads.\n- **S10:** a missing field and a missing option each fail with\
+  \ exit 1, the right message, and zero writes.\n- **S11:** with a stubbed `gh`, each\
+  \ write makes exactly its write call.\n- **GraphQL answers:** parsing of the item\
+  \ and pull-request answers, and a board field set through `Memo` over `GhCli`.\n\
+  - **`Memo` behaviour:** single-flight reads, copies, `forget`, and the limit of\
+  \ 4 in flight.\n- **Relations:** `apply` makes sub-issues and relations back to\
+  \ back with no reads between them.\n\nNotes for T2 and T3:\n- `Memo` already limits\
+  \ requests to 4 in flight, so T2's thread pool cannot exceed S4's bound at the tracker.\
+  \ It is also safe to call from several threads.\n- `apply()` calls `run.tracker.forget()`\
+  \ only between rounds. T3's `next --apply` should hand out from the last round's\
+  \ `Run`, whose reads are still memoized.\n- A run item `issue()` read triggers the\
+  \ `item` bundle for any item not already seeded. The memo cannot know which item\
+  \ is the run's, and `schedule.py` is not in this task. In practice only the run's\
+  \ item (and its sub-issues, which are seeded) are read.\n\nNo existing wrong behaviour\
+  \ found that is outside this task. No question: every scenario of the task list\
+  \ has a task."
+started: '2026-10-16T15:00:29Z'
+ended: '2026-10-16T15:22:20Z'
