@@ -7,7 +7,8 @@ branch, so writing it moves nothing in git. An event holds only what the engine'
 An event's `unit` is a unit id, except for the run waiting for the merge of its own pull requests: that event
 names the run branch (as the inbox does), and a reader must not take it for a unit.
 
-Only `next`, `record` and `apply` write. A failed write never changes a command's result: it becomes a warning.
+`fab0-resolve log` prints it (`Tail`). Only `next`, `record` and `apply` write.
+A failed write never changes a command's result: it becomes a warning.
 """
 
 from __future__ import annotations
@@ -30,6 +31,23 @@ def events_path(run: Run) -> Path:
     return run.home.common_dir() / "fab0" / "events" / f"{run.run}.jsonl"
 
 
+def parse_lines(data: bytes, first: int = 1) -> list[tuple[int, dict | None]]:
+    """Each complete line of `data` as (its number, its event), numbered from `first`; the event is None when
+    the line isn't a valid event. `data` holds whole lines only: each ends with a newline."""
+    schema = core_schema("event")
+    validator = jsonschema.Draft202012Validator(schema)  # once per read, not once per line
+    found: list[tuple[int, dict | None]] = []
+    for number, raw in enumerate(data.split(b"\n")[:-1], first):
+        try:
+            event = json.loads(raw)
+        except ValueError:
+            event = None
+        if not isinstance(event, dict) or schema_errors(event, schema, validator):
+            event = None
+        found.append((number, event))
+    return found
+
+
 def read_events(path: Path) -> list[dict]:
     """The complete, valid events of a log, oldest first. A last line without its end is still being written,
     and a line that isn't an event is skipped."""
@@ -37,17 +55,39 @@ def read_events(path: Path) -> list[dict]:
         data = path.read_bytes()
     except OSError:
         return []
-    schema = core_schema("event")
-    validator = jsonschema.Draft202012Validator(schema)  # once per read, not once per line
-    found = []
-    for raw in data.split(b"\n")[:-1]:  # what follows the last newline is not a complete line
+    return [event for _, event in parse_lines(data) if event is not None]
+
+
+def event_text(number: int, event: dict | None) -> str:
+    """An event as `log` prints it: its time and its line, on one line. An event that can't be read is said so."""
+    if event is None:
+        return f"event {number} can't be read"
+    return f"{event['time']}  {' '.join(event['line'].splitlines())}"
+
+
+class Tail:
+    """What `log` prints, a poll at a time: the complete lines appended since the last poll, as text. A last
+    line without its end is still being written; it is left until its end is there, and then taken once."""
+
+    def __init__(self, path: Path):
+        self.path = path
+        self.offset = 0  # bytes already taken
+        self.number = 0  # lines already taken
+
+    def poll(self) -> list[str]:
         try:
-            event = json.loads(raw)
-        except ValueError:
-            continue
-        if isinstance(event, dict) and not schema_errors(event, schema, validator):
-            found.append(event)
-    return found
+            with self.path.open("rb") as handle:
+                handle.seek(self.offset)
+                data = handle.read()
+        except OSError:
+            return []
+        end = data.rfind(b"\n") + 1
+        if not end:
+            return []
+        lines = [event_text(n, event) for n, event in parse_lines(data[:end], self.number + 1)]
+        self.offset += end
+        self.number += len(lines)
+        return lines
 
 
 def append_event(path: Path, event: dict) -> None:

@@ -18,8 +18,8 @@ The `fab0` marketplace and core plugin. The product's home repo is `fab0-dev/fab
 ## Conventions
 
 - Python 3.12+, standard library plus `pyyaml` and `jsonschema`. No other runtime dependency.
-- The engine is deterministic. Only `apply` writes to git refs and the tracker (D5 in the home repo's `DECISIONS.md`); `record` writes only ledger files in a unit's checkout, and `next` only creates a unit's branch when it claims the unit. The one other thing the engine writes is a run's event log under the home repo's git directory (`next`, `record` and `apply` append; the other commands never write it); it stays on the machine, and a log that can't be written is a warning, never a failed command. `apply` changes branches through plumbing, or in their checkout only when it is clean, so nobody's work moves.
-- Every command prints one JSON object. Exit codes: 0 ok, 1 error, 2 usage, 3 invalid wiring, 4 refused.
+- The engine is deterministic. Only `apply` writes to git refs and the tracker (D5 in the home repo's `DECISIONS.md`); `record` writes only ledger files in a unit's checkout, and `next` only creates a unit's branch when it claims the unit. The one other thing the engine writes is a run's event log under the home repo's git directory (`next`, `record` and `apply` append; the other commands never write it); it stays on the machine, and a log that can't be written is a warning, never a failed command. `log` prints it as text (`--follow` keeps printing new events) and reads only the home checkout's git directory: no wiring, no tracker, no version check; it is the one command whose success output isn't a JSON object. `apply` changes branches through plumbing, or in their checkout only when it is clean, so nobody's work moves.
+- Every command but `log` prints one JSON object. Exit codes: 0 ok, 1 error, 2 usage, 3 invalid wiring, 4 refused.
 - Ids and ledger names are never zero-padded.
 - Schemas are JSON Schema 2020-12.
 
