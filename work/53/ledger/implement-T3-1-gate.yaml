@@ -1,0 +1,65 @@
+step: implement
+attempt: 1
+executor: agent
+actor: eugenefurs
+branch: fab0/53/implement-T3
+base:
+  branch: fab0/53/base
+  sha: 5bde1f92d66548a07fd653b8387331e2a7e52e0c
+unit: T3
+model: opus
+gate:
+  type: auto
+  merge: auto
+  into: fab0/53/base
+  agent: reviewer
+  decision: approve
+summary: 'The change touches only plugins/fab0/skills/run/SKILL.md, the task''s one
+  file (git diff --name-only origin/fab0/53/base...fab0/53/implement-T3).; S1 and
+  S2: step 2 shows each remaining hand-out''s engine `line` before any checkout or
+  agent starts, and shows nothing for actions. In handout.py:266 and gates.py:152
+  the engine builds those lines, with the gate''s line saying `gate of <unit>`, plus
+  the command or tool.; S3 and S13: step 4 has the round''s Agent calls sent in one
+  message in the foreground, never with run_in_background and never one after another.
+  That is the mechanism the spec''s Decisions prescribe.; S4, S5 and S6: step 5 shows
+  the record result''s `line` right after each unit or gate is recorded, verified
+  or not. The engine supplies that line in handout.py:496 and gates.py:256. There
+  is a fallback for results without a `line`.; S11: step 1 shows one line per `applied`
+  entry, in order and without interpreting it, and one line when `applied` is empty.;
+  S12: the end report lists each unit''s `took` from `status` (schedule.py:121) and
+  leaves it out for units that have none.; Nothing contradicts the spec, and nothing
+  out of scope was added. `uv run --offline pytest -q` in the T3 worktree gives 249
+  passed. Ruff does not cover markdown.'
+verdict:
+  decision: approve
+  reasons:
+  - The change touches only plugins/fab0/skills/run/SKILL.md, the task's one file
+    (git diff --name-only origin/fab0/53/base...fab0/53/implement-T3).
+  - 'S1 and S2: step 2 shows each remaining hand-out''s engine `line` before any checkout
+    or agent starts, and shows nothing for actions. In handout.py:266 and gates.py:152
+    the engine builds those lines, with the gate''s line saying `gate of <unit>`,
+    plus the command or tool.'
+  - 'S3 and S13: step 4 has the round''s Agent calls sent in one message in the foreground,
+    never with run_in_background and never one after another. That is the mechanism
+    the spec''s Decisions prescribe.'
+  - 'S4, S5 and S6: step 5 shows the record result''s `line` right after each unit
+    or gate is recorded, verified or not. The engine supplies that line in handout.py:496
+    and gates.py:256. There is a fallback for results without a `line`.'
+  - 'S11: step 1 shows one line per `applied` entry, in order and without interpreting
+    it, and one line when `applied` is empty.'
+  - 'S12: the end report lists each unit''s `took` from `status` (schedule.py:121)
+    and leaves it out for units that have none.'
+  - Nothing contradicts the spec, and nothing out of scope was added. `uv run --offline
+    pytest -q` in the T3 worktree gives 249 passed. Ruff does not cover markdown.
+  findings:
+  - check: Tests and checks
+    message: No test or real run confirms S3 and S13 (activity visible while agents
+      run in parallel; no silence longer than one agent call). They hold only by the
+      skill's wording until a real run with this skill shows them, so treat them as
+      unconfirmed for the exit check (working rule 4).
+    location: plugins/fab0/skills/run/SKILL.md:42
+  - check: Quality that matters
+    message: The examples of what an `applied` entry holds leave out the `ledger`
+      push entry that apply.py:367 emits. The general instruction still covers it,
+      so this is minor.
+    location: plugins/fab0/skills/run/SKILL.md:33
