@@ -30,7 +30,7 @@ Arguments: the first is the run id: the number of the run's tracker item, or a m
 
 Repeat:
 
-1. **Apply.** `fab0-resolve apply <run>`. Show what it did as a short list, one line per entry of `applied`, in its order, saying what the entry holds (a merge, a pull request with its link, a sync, an action, a signal) without interpreting it. If `applied` is empty, say in one line that `apply` did nothing. If it fails, show the error and stop. If `kind` is `done`, or `waiting` (the run's pull request waits on a person), go to the end.
+1. **Apply.** `fab0-resolve apply <run>`. In the first round only, first show its `follow` verbatim, as the command to paste into any terminal on this machine to follow the run's events; don't show it again in later rounds. Then show what it did as a short list, one line per entry of `applied`, in its order, saying what the entry holds (a merge, a pull request with its link, a sync, an action, a signal) without interpreting it. If `applied` is empty, say in one line that `apply` did nothing. If it fails, show the error and stop. If `kind` is `done`, or `waiting` (the run's pull request waits on a person), go to the end.
 2. **Hand-outs.** `fab0-resolve next <run>`. Take its `handouts`, leaving out those with `executor: action`: `apply` performs actions. If none are left, go to the end.
    Then, before any checkout or agent starts, show each remaining hand-out's `line` (its start line), one per hand-out, all of the round's together. Show nothing for an action.
 3. **Checkouts.** For each hand-out, in the repository each entry of `branches` names:
