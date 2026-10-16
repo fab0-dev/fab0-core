@@ -130,14 +130,16 @@ def sync_children(run: Run, unit: Unit, args: dict) -> str:
         body = f"{element['id']} of run {run.run} ({run.name})."
         child = gh.create_issue(home, title, body, args.get("type"))
         gh.add_sub_issue(home, int(run.run), child)
-        items[element["id"]] = {"repo": home, "number": child["number"]}
+        items[element["id"]] = {"repo": home, "number": child["number"], "id": child["id"]}
         made.append(element["id"])
     linked = []
     for element in elements:
         for dep in element["after"]:
             if dep in items and (element["id"] in made or dep in made):
                 blocked, blocker = items[element["id"]], items[dep]
-                gh.add_blocked_by(blocked["repo"], blocked["number"], blocker["repo"], blocker["number"])
+                gh.add_blocked_by(
+                    blocked["repo"], blocked["number"], blocker["repo"], blocker["number"], blocker.get("id")
+                )
                 linked.append(f"#{blocked['number']} after #{blocker['number']}")
     did = f"created {', '.join('#' + str(items[i]['number']) for i in made)}"
     return did + (f"; {', '.join(linked)}" if linked else "")
@@ -331,6 +333,8 @@ def signals(run: Run, result: dict) -> list[tuple[str, str]]:
 
 
 def apply(run: Run, only: str | None = None) -> dict:
+    """Perform what is due, round after round. A round evaluates the run from one read of the tracker; the next
+    reads it again, since the last one changed something."""
     applied: list[dict] = []
     for _ in range(ROUNDS):
         result = run.evaluate()
@@ -367,5 +371,6 @@ def apply(run: Run, only: str | None = None) -> dict:
                 applied.append({"ledger": pushed})
             applied += [{"item": ref, "signal": text} for ref, text in signals(run, result)]
             return {**result, "applied": applied}
-        run = Run(run.w, run.name, run.run, run.actor, run.tracker)  # read everything again
+        run.tracker.forget()  # what changed is read again, not answered from the round before
+        run = Run(run.w, run.name, run.run, run.actor, run.tracker)
     raise Fail(EXIT_ERROR, f"apply didn't settle after {ROUNDS} rounds", applied=applied)
