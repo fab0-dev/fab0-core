@@ -65,3 +65,38 @@ def test_apply_pushes_the_ledger_branch(factory):
     assert {"ledger": "pushed fab0/ledger"} in res["applied"]
     assert f.run("apply", "7")["applied"] == []
     assert [r["run"] for r in f.run("inbox", "--as", "u")["runs"]] == ["7"], "found on the ledger branch"
+
+
+def log_of(f, run: str):
+    return f.repo("home") / ".git" / "fab0" / "events" / f"{run}.jsonl"
+
+
+def test_the_inbox_shows_the_latest_event_of_each_run_that_has_one(story):
+    story.gh_edit(lambda d: d["issues"].update({"acme/shop#413": {"title": "Cancel a booking", "type": "Story"}}))
+    spec_done(story)
+    story.run("apply", "412")
+    events = [json.loads(line) for line in log_of(story, "412").read_text().splitlines()]
+    assert not log_of(story, "413").exists()
+    res = story.run("inbox", "--as", "po-user")
+    runs = {r["run"]: r for r in res["runs"]}
+    assert runs["412"]["latest"] == {"time": events[-1]["time"], "line": events[-1]["line"]}
+    assert "latest" not in runs["413"]
+    assert not log_of(story, "413").exists(), "the inbox writes no log"
+
+
+def test_the_inbox_changes_no_log(story):
+    spec_done(story)
+    story.run("apply", "412")
+    before = log_of(story, "412").read_bytes()
+    story.run("inbox", "--as", "po-user")
+    assert log_of(story, "412").read_bytes() == before
+
+
+def test_an_unreadable_last_line_is_not_the_latest_event(story):
+    spec_done(story)
+    story.run("apply", "412")
+    complete = [json.loads(line) for line in log_of(story, "412").read_text().splitlines()]
+    with log_of(story, "412").open("a") as fh:
+        fh.write('{"time": "2026-10-16T')  # an event still being written
+    res = story.run("inbox", "--as", "po-user")
+    assert res["runs"][0]["latest"]["line"] == complete[-1]["line"]

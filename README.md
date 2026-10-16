@@ -9,9 +9,9 @@ fab0 is a toolkit for building and operating software factories. A factory is on
 | Path | What |
 |---|---|
 | `.claude-plugin/marketplace.json` | The `fab0` marketplace |
-| `plugins/fab0/bin/fab0-resolve` | The engine: `validate`, `status`, `next`, `record`, `apply`, `inbox` and `--version`, on schema 2 |
+| `plugins/fab0/bin/fab0-resolve` | The engine: `validate`, `status`, `next`, `record`, `apply`, `inbox`, `log` and `--version`, on schema 2 |
 | `plugins/fab0/lib/fab0_engine/` | The engine's modules; `bin/fab0-resolve` is its entry point |
-| `plugins/fab0/schemas/` | Schema 2: JSON Schemas for the project file, pipelines, steps, artifacts, verdicts, returns and ledger entries |
+| `plugins/fab0/schemas/` | Schema 2: JSON Schemas for the project file, pipelines, steps, artifacts, verdicts, returns, ledger entries and run events |
 | `plugins/fab0/skills/` | `/fab0:run` (executes what the engine hands out), `/fab0:inbox`, and `github` (setup and rules) |
 | `tests/` | Fixture-based tests of the engine |
 | `scripts/e2e-triage.py` | Runs `/fab0:run` headlessly on the `triage` fixture against a fake tracker (costs tokens) |

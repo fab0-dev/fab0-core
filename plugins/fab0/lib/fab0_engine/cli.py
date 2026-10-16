@@ -1,13 +1,16 @@
-"""fab0-resolve: the command line of the engine. Every command prints one JSON object.
+"""fab0-resolve: the command line of the engine.
 
   validate              check the project's .fab0/ wiring (schema 2)
   status RUN            every unit of a run and its state; read-only
   next RUN              the same, and a hand-out for every unit that is ready or running
   record RUN UNIT       check a unit's result, or with --gate its gate's, and write the ledger entry
+  log RUN [--follow]    print the run's events, oldest first, as text; with --follow, keep printing new ones
   --version             the fab0 release of this engine
 
   apply RUN             perform what is due: actions, merges, pull requests (writes git and the tracker)
   inbox                 every open run, and what it needs from whom; read-only
+
+Every command but `log` prints one JSON object; `log` prints text, and its errors are the usual object.
 
 Exit codes: 0 ok, 1 error, 2 usage, 3 invalid wiring, 4 refused.
 """
@@ -17,11 +20,15 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import shlex
+import signal
 import subprocess
+import time
 from pathlib import Path
 
 from .apply import apply as apply_run
 from .errors import EXIT_ERROR, EXIT_INVALID, EXIT_OK, EXIT_REFUSED, EXIT_USAGE, Fail
+from .events import EventLog, Tail
 from .gates import gate_handout, record_gate, save_gate_pending
 from .handout import action_handout, claim, handout, record, save_pending
 from .inbox import inbox
@@ -171,6 +178,7 @@ def cmd_next(args) -> dict:
     run = load_run(args)
     result = run.evaluate()
     handouts = []
+    log = EventLog(run)  # each hand-out is logged as it is made; a log that fails only adds a warning
     for unit in run.units:
         if args.unit and unit.id != args.unit:
             continue
@@ -183,15 +191,19 @@ def cmd_next(args) -> dict:
                 continue
             out = handout(run, unit)
             save_pending(run, unit, out)
+            log.handouts([out])
             handouts.append(out)
         elif unit.state == "waiting" and unit.auto and (unit.reason or {}).get("gate") in ("gate", "running"):
             out = gate_handout(run, unit)
             save_gate_pending(run, unit, out)
+            log.handouts([out])
             handouts.append(out)
     if args.unit and not handouts:
         found = next((u.summary() for u in run.units if u.id == args.unit), None)
         raise Fail(EXIT_REFUSED, f"{args.unit} is not ready", unit=found)
     result["units"] = [u.summary() for u in run.units]  # claims made just now may have changed a state
+    log.states(result)
+    WARNINGS.extend(log.warnings)
     return {**result, "handouts": handouts}
 
 
@@ -206,18 +218,71 @@ def cmd_record(args) -> dict:
     run.evaluate()
     if args.gate:
         output = Path(args.output).read_text(errors="replace") if args.output else None
-        return record_gate(run, args.unit, returned, args.exit, output)
-    return record(run, args.unit, returned, args.exit)
+        result = record_gate(run, args.unit, returned, args.exit, output)
+    else:
+        result = record(run, args.unit, returned, args.exit)
+    log = EventLog(run)  # after the ledger entry; a refused record raised above and logs nothing
+    log.recorded(result)
+    WARNINGS.extend(log.warnings)
+    return result
+
+
+def follow_command(run: Run) -> str:
+    """The command that follows the run from any terminal on this machine: this engine's own path, found
+    relative to this module, and the home repo's main checkout."""
+    engine = Path(__file__).resolve().parents[2] / "bin" / "fab0-resolve"
+    return shlex.join([str(engine), "log", run.run, "--follow", "--project", str(main_checkout(run.w.root))])
 
 
 def cmd_apply(args) -> dict:
-    return apply_run(load_run(args), args.unit)
+    run = load_run(args)
+    return {**apply_run(run, args.unit), "follow": follow_command(run)}
 
 
 def cmd_inbox(args) -> dict:
     wiring = load_wiring(args)
     tracker = make_tracker()
     return inbox(wiring, tracker, actor(args, tracker), lambda run: pick_pipeline(wiring, run, None, tracker))
+
+
+POLL = 1.0  # seconds between two looks at the log of a followed run
+
+
+def home_common_dir(root: Path) -> Path:
+    run = subprocess.run(
+        ["git", "-C", str(root), "rev-parse", "--path-format=absolute", "--git-common-dir"],
+        capture_output=True,
+        text=True,
+    )
+    if run.returncode:
+        raise Fail(EXIT_ERROR, f"{root} is not a git repository: {run.stderr.strip()}")
+    return Path(run.stdout.strip())
+
+
+def cmd_log(args) -> int:
+    """Print a run's event log as text. It reads only the home checkout's git directory: no wiring, no tracker,
+    no version check."""
+    root = find_project(args.project)
+    if not RUN_ID.match(args.run):
+        raise Fail(EXIT_USAGE, f"run id '{args.run}': letters, digits, . _ - only")
+    tail = Tail(home_common_dir(root) / "fab0" / "events" / f"{args.run}.jsonl")
+    lines = tail.poll()
+    if not lines:
+        print(f"run {args.run} has no events here yet", flush=True)
+    for line in lines:
+        print(line, flush=True)
+    if args.follow:
+        signal.signal(
+            signal.SIGINT, signal.default_int_handler
+        )  # an interrupt ends it, even if it was inherited ignored
+        try:
+            while True:
+                time.sleep(POLL)
+                for line in tail.poll():
+                    print(line, flush=True)
+        except (KeyboardInterrupt, BrokenPipeError):
+            pass
+    return EXIT_OK
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -260,6 +325,12 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--profile", help="a profile from fab0.yaml to apply")
     p.set_defaults(handler=cmd_inbox)
 
+    p = sub.add_parser("log", help="print a run's events, oldest first; read-only")
+    p.add_argument("run", help="the run id")
+    p.add_argument("--follow", action="store_true", help="keep printing new events until interrupted")
+    p.add_argument("--project", help="the home repo (default: found from the current directory)")
+    p.set_defaults(handler=cmd_log)
+
     args = parser.parse_args(argv)
     if args.version:
         args.handler = cmd_version
@@ -267,6 +338,8 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("a command is required")
     WARNINGS.clear()
     try:
+        if args.command == "log" and not args.version:
+            return cmd_log(args)
         result, code = args.handler(args), EXIT_OK
         if WARNINGS:
             result = {**result, "warnings": [*WARNINGS, *result.get("warnings", [])]}

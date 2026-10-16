@@ -21,6 +21,6 @@ Blocked:
   <run> <unit>   <reason>
 ```
 
-Write a reason as its key and value, for example `gate human`, `questions 2`, `tracker acme/shop#9`, `invalid-dependency after makes a cycle: T1 -> T2 -> T1`. Under the sections, list the open runs once (`runs`: run, pipeline, title), and any `skipped` traces with why.
+Write a reason as its key and value, for example `gate human`, `questions 2`, `tracker acme/shop#9`, `invalid-dependency after makes a cycle: T1 -> T2 -> T1`. Under the sections, list the open runs once (`runs`: run, pipeline, title), and any `skipped` traces with why. Under each run, when it has `latest`, show its time and line on one line, for example `latest 2026-10-16T10:12:40Z  spec, attempt 1: verified, 8m 28s`; a run without `latest` has no events on this machine, so show nothing for it.
 
 Don't run anything it suggests. Running is the person's choice, through `/fab0:run`.

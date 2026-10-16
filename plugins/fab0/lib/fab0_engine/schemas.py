@@ -20,13 +20,15 @@ def load_schema(path: Path) -> dict:
 
 
 def core_schema(name: str) -> dict:
-    """A core schema by name: `project`, `pipeline`, `step`, `artifact`, `verdict`, `return`, `ledger-entry`."""
+    """A core schema by name: `project`, `pipeline`, `step`, `artifact`, `verdict`, `return`, `ledger-entry`,
+    `event`."""
     return load_schema(SCHEMAS / f"{name}.json")
 
 
-def schema_errors(instance, schema: dict) -> list[str]:
-    """Readable errors, one per failing location, sorted by location."""
-    validator = jsonschema.Draft202012Validator(schema)
+def schema_errors(instance, schema: dict, validator: jsonschema.Draft202012Validator | None = None) -> list[str]:
+    """Readable errors, one per failing location, sorted by location. A caller that checks many instances
+    against one schema passes its `validator`, built once."""
+    validator = validator or jsonschema.Draft202012Validator(schema)
     out = []
     for err in sorted(validator.iter_errors(instance), key=lambda e: [str(p) for p in e.absolute_path]):
         if err.context:

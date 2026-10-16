@@ -1,0 +1,56 @@
+step: implement
+attempt: 1
+executor: agent
+actor: eugenefurs
+branch: fab0/54/implement-T3
+base:
+  branch: fab0/54/base
+  sha: 8fce0f61d338b3ec9fe1daf0577b4a54942b53ca
+unit: T3
+model: opus
+gate:
+  type: auto
+  merge: auto
+  into: fab0/54/base
+  agent: reviewer
+  decision: approve
+summary: 'S18 is met. `inbox()` now adds `latest: {time, line}` to each open run in
+  `runs` that has a complete event in its log on this machine, and a run without a
+  log gets no `latest` (plugins/fab0/lib/fab0_engine/inbox.py:89-119). It reads the
+  log with T1''s `events_path` and `read_events`, so nothing is written or created,
+  and a half-written or invalid line is never taken as the latest event.; `/fab0:inbox`
+  (plugins/fab0/skills/inbox/SKILL.md:24) shows the time and line of `latest` under
+  each open run, and nothing for a run without it. This matches the spec''s decision
+  that `/fab0:inbox` shows it beside the run.; The tests show the scenario. Two open
+  runs: one carries `latest` equal to its last logged event, the other has none and
+  no log file is created for it (tests/test_inbox.py:74). The inbox leaves an existing
+  log byte-for-byte unchanged (tests/test_inbox.py:86), and an incomplete last line
+  is ignored (tests/test_inbox.py:94).; Scope: `git diff --name-only` shows only the
+  task''s three files.; Checks run in the T3 worktree: `uv run pytest tests/test_inbox.py
+  -q` gives 8 passed; `uv run pytest -q` gives 276 passed; `uv run ruff check` and
+  `uv run ruff format --check` are clean.; The existing fields of `inbox` entries
+  are kept. The only addition is `latest`, which the constraints allow.'
+verdict:
+  decision: approve
+  reasons:
+  - 'S18 is met. `inbox()` now adds `latest: {time, line}` to each open run in `runs`
+    that has a complete event in its log on this machine, and a run without a log
+    gets no `latest` (plugins/fab0/lib/fab0_engine/inbox.py:89-119). It reads the
+    log with T1''s `events_path` and `read_events`, so nothing is written or created,
+    and a half-written or invalid line is never taken as the latest event.'
+  - '`/fab0:inbox` (plugins/fab0/skills/inbox/SKILL.md:24) shows the time and line
+    of `latest` under each open run, and nothing for a run without it. This matches
+    the spec''s decision that `/fab0:inbox` shows it beside the run.'
+  - 'The tests show the scenario. Two open runs: one carries `latest` equal to its
+    last logged event, the other has none and no log file is created for it (tests/test_inbox.py:74).
+    The inbox leaves an existing log byte-for-byte unchanged (tests/test_inbox.py:86),
+    and an incomplete last line is ignored (tests/test_inbox.py:94).'
+  - 'Scope: `git diff --name-only` shows only the task''s three files.'
+  - 'Checks run in the T3 worktree: `uv run pytest tests/test_inbox.py -q` gives 8
+    passed; `uv run pytest -q` gives 276 passed; `uv run ruff check` and `uv run ruff
+    format --check` are clean.'
+  - The existing fields of `inbox` entries are kept. The only addition is `latest`,
+    which the constraints allow.
+  findings: []
+started: '2026-10-16T15:56:03Z'
+ended: '2026-10-16T16:05:27Z'
