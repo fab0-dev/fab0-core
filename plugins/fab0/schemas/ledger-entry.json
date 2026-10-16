@@ -20,6 +20,11 @@
       "additionalProperties": false,
       "properties": {"branch": {"type": "string", "minLength": 1}, "sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"}}
     },
+    "started": {
+      "description": "When the attempt or the gate decision was handed out, UTC (RFC 3339, whole seconds). Left out by engines before times were kept.",
+      "$ref": "#/$defs/time"
+    },
+    "ended": {"description": "When it was recorded, UTC. Written with `started`.", "$ref": "#/$defs/time"},
     "inputs": {"$ref": "#/$defs/hashes"},
     "outputs": {"$ref": "#/$defs/hashes"},
     "claims": {"description": "The paths the unit claimed.", "type": "array", "items": {"type": "string", "minLength": 1}},
@@ -51,5 +56,8 @@
       "items": {"type": "string"}
     }
   },
-  "$defs": {"hashes": {"type": "object", "additionalProperties": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}}}
+  "$defs": {
+    "time": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"},
+    "hashes": {"type": "object", "additionalProperties": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}}
+  }
 }
