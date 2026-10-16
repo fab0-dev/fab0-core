@@ -33,23 +33,28 @@ Repeat:
 1. **Apply and hand out.** `fab0-resolve next <run> --apply`: it performs what is due, as `apply` does, then hands out what is ready, from the same read of the tracker. Show what it did as a short list, one line per entry of `applied`, in its order, saying what the entry holds (a merge, a pull request with its link, a sync, an action, a signal) without interpreting it. If `applied` is empty, say in one line that `apply` did nothing. If it fails, show the error and stop; it handed out nothing. If `kind` is `done`, or `waiting` (the run's pull request waits on a person), go to the end. If it is refused because `--unit` isn't ready (exit 4), show the error and what it applied, and stop.
    Take its `handouts`, leaving out those with `executor: action`: `apply` performs actions. If none are left, go to the end.
    Then, before any checkout or agent starts, show each remaining hand-out's `line` (its start line), one per hand-out, all of the round's together. Show nothing for an action.
-2. **Checkouts.** For each hand-out, in the repository each entry of `branches` names:
+2. **Checkouts.** Run every checkout command of the round, for every hand-out, in one Bash call: one command per line, in the order below and hand-out by hand-out, not chained with `&&`, so that one that fails doesn't stop the others. Read each one's output. For each hand-out, in the repository each entry of `branches` names:
    - an entry without `worktree` that doesn't exist: `git -C <path> branch <branch> <from>`. Another hand-out may have created it already; that is fine.
    - the entry with `worktree`: if that path is already a checkout of `branch`, use it. Otherwise `git -C <path> worktree add <worktree> <branch>` when `exists` is true, or `git -C <path> worktree add -b <branch> <worktree> <from>` when it isn't.
    - with `sync: true`: `git -C <worktree> merge --no-edit <from>`. If it stops on conflicts (listed in `conflicts`), leave them: the brief tells the agent to resolve them, and the commit after `record` concludes the merge.
    - a gate hand-out (`gate: true`) names one `worktree` on `branch`: add it the same way if it isn't there.
+   Other than the cases named here, if a command fails, show its output and stop.
 3. **Execute**, every hand-out of this round:
-   - **agent** (a unit or a gate): call the Agent tool with `subagent_type` = `agent`, `model` = `model` and `prompt` = `brief`. Send all of the round's Agent calls in one message so they run in parallel, in the foreground: never with `run_in_background`, and never one after the other to make them easier to follow. Claude Code then shows each agent's activity (its tool calls) while it works. Wait for every one. Take the JSON object from each agent's final message (inside a code fence, take the fence's content) and write it to `<returns>/<unit>.json`, or `<unit>-gate.json` for a gate.
-   - **command**: run `command` with the unit's `worktree` (a gate's `worktree`) as the working directory, and keep its exit code. For a gate, also save its output to `<returns>/<unit>-gate.txt`.
-   - **tool**: call the tool named in `tool` with `with` as its arguments. If this session doesn't have that tool, don't imitate it: report it and stop. Then write the return, valid against `return_schema`: `summary` is one line on what the call did, plus `data` if the schema asks for it, taken from the tool's result.
-4. **Record and commit**, each hand-out, in one Bash call per hand-out: `record`, then the commit of what it wrote, chained with `&&` so a refused record commits nothing. Send all of the round's calls in one message, so they run together. End each call with `|| echo "failed: exit $?"`, so that a refusal doesn't stop the others of its message.
+   - **agent** (a unit or a gate): call the Agent tool with `subagent_type` = `agent`, `model` = `model` and `prompt` = `brief`. Send all of the round's Agent calls in one message so they run in parallel, in the foreground: never with `run_in_background`, and never one after the other to make them easier to follow. Claude Code then shows each agent's activity (its tool calls) while it works. Wait for every one. Take the JSON object from each agent's final message (inside a code fence, take the fence's content), and keep it for step 4: it is written there, not now.
+   - **command**: run `command` with the unit's `worktree` (a gate's `worktree`) as the working directory, and keep its exit code. For a gate, save its output to `<returns>/<unit>-gate.txt` in the same call.
+   - **tool**: call the tool named in `tool` with `with` as its arguments. If this session doesn't have that tool, don't imitate it: report it and stop. Then make the return for step 4, valid against `return_schema`: `summary` is one line on what the call did, plus `data` if the schema asks for it, taken from the tool's result.
+4. **Record and commit**, each hand-out, in one Bash call per hand-out: write its return file, then `record`, then the commit of what it wrote, chained with `&&` so a refused record commits nothing. Send all of the round's calls in one message, so they run together. End each call with `|| echo "failed: exit $?"`, so that a refusal doesn't stop the others of its message.
+   - the return file: a quoted heredoc written inside the call, before `record`, so no other turn writes it. Use a delimiter the JSON can't hold (`FAB0_RETURN`). Command units and gates, which return an exit code, have no return file: record them with `--exit <code>` (a gate's output is already saved);
    - a unit: `fab0-resolve record <run> <unit> --return <file>`, or `--exit <code>` for a command;
    - a gate: `fab0-resolve record <run> <unit> --gate --return <file>`, or `--gate --exit <code> --output <file>` for a command.
    - then, in the checkout `record` writes to (each `worktree` of the unit, or the gate's: chain one `add` and `commit` for each), with the hand-out's `attempt` and `fab0_version`, and the first line of the return's `summary` (for a command, `exit <code>`):
      ```bash
-     fab0-resolve record <run> <unit> --return <file> \
+     mkdir -p <returns> && cat > <file> <<'FAB0_RETURN' \
+       && fab0-resolve record <run> <unit> --return <file> \
        && git -C <worktree> add -A && git -C <worktree> commit -m "<unit> attempt <attempt> (fab0 <fab0_version>): <first line of the summary>" \
        || echo "failed: exit $?"
+     <the return's JSON>
+     FAB0_RETURN
      ```
      For a gate: `"<unit> gate <attempt>: <decision, or exit code>"`. Don't push; `apply` pushes what it merges, opens a pull request for, or keeps on the ledger branch.
    - Show each result's `line` (its end line: the outcome and how long it took), for every unit and gate, verified or not, once the round's calls are back. When a result has no `line`, say that it was recorded.

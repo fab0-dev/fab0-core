@@ -9,9 +9,10 @@ import sys
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+import pytest
 import yaml
-from conftest import ROOT, SCRIPT, Factory, git, reads, start_story
-from test_gates import record_gate, verdict
+from conftest import ROOT, SCRIPT, Factory, git, reads, start_story, writes
+from test_gates import TRIAGE_GH, classify, record_gate, verdict
 from test_run import SPEC, STORY_GH, do_spec, handouts, start_work, states
 from test_tracker import no_repeats, two_task_run
 
@@ -104,14 +105,29 @@ def tuples(calls: list[dict]) -> list[tuple]:
     return [(c["method"], c["args"]) for c in calls]
 
 
-def test_a_quiet_round_with_a_signal_field_reads_the_signals_once_too(story):
+def signal_round(story):
     story.edit("fab0.yaml", lambda d: d["tracker"]["fields"].update(signal="Signal"))
     two_task_run(story)
     story.gh_edit(lambda d: [d["issues"][f"acme/shop#{n}"].update(fields={}) for n in (500, 501)])
-    asked, round_, status, res = quiet_round(story)
-    extra = [c for c in tuples(round_) if c not in tuples(asked)]
-    assert sorted(m for m, _ in extra) == ["item", "user"], "who is running, and the item again, with its board entries"
+    return quiet_round(story)
+
+
+def test_a_quiet_round_with_a_signal_field_gives_what_status_gives(story):
+    asked, round_, status, res = signal_round(story)
+    extra = [m for m, _ in tuples(round_) if (m, _) not in tuples(asked)]
+    assert "user" in extra, "who is running"
     assert states(res) == states(status)
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="KNOWN GAP, a follow-up: `cli.py` calls `make_tracker()` without `boards=True`, so the first read of "
+    "a board field makes a second read of the run's item. Passing it needs T1's tests in tests/test_tracker.py "
+    "changed.",
+)
+def test_a_quiet_round_with_a_signal_field_costs_one_tracker_call_more_than_status(story):
+    asked, round_, _, _ = signal_round(story)
+    assert len(round_) == len(asked) + 1, "S13: who is running, and nothing else"
 
 
 # ------------------------------------------------------------ S14, S15, S16
@@ -229,6 +245,32 @@ def test_record_with_several_pipelines_reads_only_the_runs_item(story):
     assert res["verified"]
 
 
+def test_record_of_a_unit_behind_a_tracker_condition_reads_the_tracker_as_status_does(factory):
+    """The fallback: a `when` on a tracker condition leaves the unit out of the offline run, so `record` reads the
+    tracker once, as one evaluation (a follow-up gives `record` the unit from its saved hand-out instead)."""
+    f = factory("triage").init_git(TRIAGE_GH)
+    classify(f, {"severity": "high", "area": "billing"})
+    record_gate(f, "7", "classify", exit=0)
+    f.gh_edit(lambda d: d["issues"]["acme/support#7"]["labels"].extend(["severity-high", "area-billing"]))
+    page = handouts(f.run("next", "7"))["page"]
+    tree = Path(page["branches"][0]["worktree"])
+    if not tree.exists():
+        start_work(f, page)
+    returned = tree / ".." / "page-return.json"
+    returned.write_text(json.dumps({"summary": "Posted."}))
+    f.reset_calls()
+    f.run("status", "7")
+    status = f.calls()
+    f.reset_calls()
+    res = f.run("record", "7", "page", "--return", str(returned))
+    assert res["unit"] == "page" and res["verified"]
+    calls = f.calls()
+    assert calls and not writes(calls), "it reads, and writes nothing"
+    no_repeats(calls)
+    assert "user" not in {c["method"] for c in calls}, "and doesn't ask who is running"
+    assert sorted(tuples(calls)) == sorted(tuples(status)), "the reads of one evaluation, as `status` makes them"
+
+
 # ------------------------------------------------------------ S19, S20: the session's round
 
 
@@ -240,19 +282,32 @@ def test_the_skill_runs_a_round_in_four_turns():
     assert not re.search(r"`fab0-resolve next <run>`", loop), "and no separate next"
     steps = re.findall(r"^\d+\. \*\*(.+?)\.?\*\*", loop, re.M)
     assert steps == ["Apply and hand out", "Checkouts", "Execute", "Record and commit"]
+    checkouts = loop[loop.index("2. **Checkouts") : loop.index("3. **Execute")]
+    assert "every checkout command of the round, for every hand-out, in one Bash call" in checkouts
+    execute = loop[loop.index("3. **Execute") : loop.index("4. **Record and commit")]
+    assert "<returns>/<unit>.json" not in execute, "no return file is written before the record turn"
     record = loop[loop.index("**Record and commit") :]
     assert "&&" in record and "one Bash call" in record, "chained, so a refused record commits nothing"
     assert "one message" in record, "a round's calls go in one message"
     assert "`line`" in loop and "applied" in loop, "what apply did, and the start and end lines, are still shown"
+    chain = record[record.index("```bash") :]
+    chain = chain[: chain.index("```", 3)]
+    assert "<<'FAB0_RETURN'" in chain, "the return file is written inside the call, by a quoted heredoc"
+    order = [chain.index(x) for x in ("cat > <file>", "fab0-resolve record", "git -C <worktree> add", "|| echo")]
+    assert order == sorted(order), "written, then recorded, then committed"
 
 
-def chained(f, unit: str, tree: Path, returned: Path) -> str:
-    """The Bash call the skill makes for a hand-out: record, and commit only when it was recorded."""
+def chained(f, unit: str, tree: Path, returned: Path, returns: dict) -> str:
+    """The Bash call the skill makes for a hand-out: write the return, record it, and commit only when it was
+    recorded. The form is the skill's own: a heredoc on the first line, the chain continued after it."""
     message = f"{unit} attempt 1 (fab0 test): Done."
     return (
-        f"{sys.executable} {SCRIPT} record 412 {unit} --return {returned}"
-        f" && git -C {tree} add -A && git -C {tree} commit -q -m '{message}'"
-        f' || echo "failed: exit $?"'
+        f"mkdir -p {returned.parent} && cat > {returned} <<'FAB0_RETURN' \\\n"
+        f"  && {sys.executable} {SCRIPT} record 412 {unit} --return {returned} \\\n"
+        f"  && git -C {tree} add -A && git -C {tree} commit -q -m '{message}' \\\n"
+        f'  || echo "failed: exit $?"\n'
+        f"{json.dumps(returns)}\n"
+        f"FAB0_RETURN\n"
     )
 
 
@@ -268,6 +323,7 @@ def test_a_refused_record_commits_nothing_and_the_others_do(story):
     ready = {h["unit"]: h for h in round_["handouts"]}
     assert sorted(ready) == ["implement-T1", "implement-T2", "implement-T3"]
     work = {}
+    ok, bad_unit = {"summary": "Done."}, "implement-T2"
     for unit, (repo, rel) in {
         "implement-T1": ("backend", "src/a.py"),
         "implement-T2": ("backend", "src/b.py"),
@@ -276,13 +332,13 @@ def test_a_refused_record_commits_nothing_and_the_others_do(story):
         tree = start_work(story, ready[unit])[repo]
         (tree / rel).parent.mkdir(parents=True, exist_ok=True)
         (tree / rel).write_text("x = 1\n")
-        returned = tree / ".." / f"{unit}-return.json"
-        returned.write_text(json.dumps({"nothing": "to say"} if unit == "implement-T2" else {"summary": "Done."}))
+        returned = tree / ".." / f"{unit}-return.json"  # not written: the record call writes it
         work[unit] = (repo, tree, returned)
 
-    def turn(unit: str) -> subprocess.CompletedProcess:
+    def turn(unit: str, returns: dict | None = None) -> subprocess.CompletedProcess:
         _, tree, returned = work[unit]
-        return call(story, chained(story, unit, tree, returned))
+        bad = {"nothing": "to say"}
+        return call(story, chained(story, unit, tree, returned, returns or ({bad_unit: bad}.get(unit, ok))))
 
     with ThreadPoolExecutor(3) as pool:  # a round's calls go in one message
         out = dict(zip(work, pool.map(turn, work), strict=True))
@@ -295,8 +351,7 @@ def test_a_refused_record_commits_nothing_and_the_others_do(story):
     assert "doesn't match its schema" in out["implement-T2"].stdout and "failed: exit 4" in out["implement-T2"].stdout
     assert git(tree, "log", "-1", "--format=%s") != "implement-T2 attempt 1 (fab0 test): Done.", "not committed"
     assert not list((tree / "work" / "412" / "ledger").glob("implement-T2-*")), "and no entry was written"
-    returned.write_text(json.dumps({"summary": "Done."}))  # the agent called again with the errors
-    again = turn("implement-T2")
+    again = turn("implement-T2", ok)  # the agent called again with the errors
     assert '"verified": true' in again.stdout and "failed: exit" not in again.stdout
     assert git(tree, "log", "-1", "--format=%s") == "implement-T2 attempt 1 (fab0 test): Done."
 
