@@ -293,8 +293,17 @@ def test_the_skill_runs_a_round_in_four_turns():
     chain = record[record.index("```bash") :]
     chain = chain[: chain.index("```", 3)]
     assert "<<'FAB0_RETURN'" in chain, "the return file is written inside the call, by a quoted heredoc"
-    order = [chain.index(x) for x in ("cat > <file>", "fab0-resolve record", "git -C <worktree> add", "|| echo")]
+    order = [
+        chain.index(x)
+        for x in ("cat > <returns>/<unit>.json", "fab0-resolve record", "git -C <worktree> add", "|| echo")
+    ]
     assert order == sorted(order), "written, then recorded, then committed"
+    assert "--return <returns>/<unit>.json" in chain, "record reads the file the call wrote"
+    assert "<file>" not in record, "no unnamed return file: concurrent calls could share a path"
+    assert "<returns>/<unit>.json" in record and "<returns>/<unit>-gate.json" in record, (
+        "a file per unit and per gate, so a round's concurrent calls keep their files apart"
+    )
+    assert "<returns>/<unit>-gate.txt" in record, "a command gate's output has its own file"
 
 
 def chained(f, unit: str, tree: Path, returned: Path, returns: dict) -> str:
