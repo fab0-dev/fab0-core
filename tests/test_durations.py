@@ -3,18 +3,20 @@
 from pathlib import Path
 
 import yaml
+from conftest import git, start_docs
+from fab0_engine.ledger import parse
 from fab0_engine.schedule import Unit
 from test_gates import ONE_TASK, implement, record_gate, verdict
-from test_run import do_spec
+from test_run import BRIEF, DOCS_GH, do_spec, finish, handouts, start_work
 
 
 def unit_of(result: dict, name: str) -> dict:
     return next(u for u in result["units"] if u["unit"] == name)
 
 
-def retime(tree: Path, name: str, started: str | None, ended: str | None = None) -> None:
+def retime(tree: Path, name: str, started: str | None, ended: str | None = None, run: str = "412") -> None:
     """Set the times of a ledger entry in a checkout, as if the unit had taken that long. None drops them."""
-    path = tree / "work" / "412" / "ledger" / name
+    path = tree / "work" / run / "ledger" / name
     entry = yaml.safe_load(path.read_text())
     entry.pop("started", None)
     entry.pop("ended", None)
@@ -67,6 +69,8 @@ def test_an_entry_without_times_leaves_the_duration_out(story):
     unit = unit_of(res, "implement-T1")
     assert "duration" not in unit and "took" not in unit
     assert unit["state"], "nothing fails"
+    old = tree / "work" / "412" / "ledger" / "implement-T1-1.yaml"
+    assert "started" not in parse(old.read_bytes(), "old entry"), "an old entry is still valid"
 
 
 def test_a_gate_decision_without_times_leaves_the_duration_out(story):
@@ -82,3 +86,42 @@ def test_a_clock_that_moved_back_counts_zero():
     unit.gates = {1: {"started": "2026-10-15T10:00:00Z", "ended": "2026-10-15T10:01:05Z"}}
     assert unit.duration() == 65
     assert Unit(id="u", step=None, label="u", ctx=None).duration() is None
+
+
+def gated_block_with_a_decision(factory):
+    """The docs fixture's gated block `parallel-3`, whose command gate has approved; the decision took 1m 5s."""
+    f = factory("docs").init_git(DOCS_GH)
+    start_docs(f)
+    brief = handouts(f.run("next", "docs-1"))["brief"]
+    files = {("home", "briefs/docs-1.md"): BRIEF, ("home", "work/docs-1/pages.json"): "[]"}
+    finish(f, "docs-1", brief, start_work(f, brief), files, {"summary": "Nothing to write."})
+    f.merge("home", "docs/docs-1--brief", "docs/docs-1")
+    for unit in ("parallel-3--spelling", "parallel-3--links", "parallel-3--index"):
+        h = handouts(f.run("next", "docs-1", "--unit", unit))[unit]
+        files = {("home", "docs/index.md"): "# Docs\n"} if unit.endswith("index") else None
+        extra = [{"summary": "Index."}] if files else []
+        finish(f, "docs-1", h, start_work(f, h), files, *extra, **({} if files else {"exit": 0}))
+        f.merge("home", h["branch"], "docs/docs-1--parallel-3")
+    h = handouts(f.run("next", "docs-1", "--unit", "parallel-3"))["parallel-3"]
+    tree = Path(h["worktree"])
+    git(f.repo("home"), "worktree", "add", "-q", str(tree), h["branch"])
+    record_gate(f, "docs-1", "parallel-3", exit=0)
+    retime(tree, "parallel-3-1-gate.yaml", "2026-10-15T10:00:00Z", "2026-10-15T10:01:05Z", run="docs-1")
+    git(tree, "add", "-A")
+    git(tree, "commit", "-q", "--amend", "--no-edit")
+    return f
+
+
+def test_a_gated_block_has_its_gate_decisions_duration_while_it_waits(factory):
+    f = gated_block_with_a_decision(factory)
+    block = unit_of(f.run("status", "docs-1"), "parallel-3")
+    assert block["state"] == "waiting"
+    assert (block["duration"], block["took"]) == (65, "1m 5s")
+
+
+def test_a_gated_block_keeps_its_duration_once_it_is_done(factory):
+    f = gated_block_with_a_decision(factory)
+    f.merge("home", "docs/docs-1--parallel-3", "docs/docs-1")
+    block = unit_of(f.run("status", "docs-1"), "parallel-3")
+    assert block["state"] == "done"
+    assert (block["duration"], block["took"]) == (65, "1m 5s")

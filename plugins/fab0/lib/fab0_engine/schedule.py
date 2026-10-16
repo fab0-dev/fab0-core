@@ -362,6 +362,8 @@ class Run:
         on_parent = all(self.on_branch(u, ctx.parent) for u in children)
         if on_parent:
             block.state, block.reason = "done", None
+            if block.auto is not None:  # its gate decisions stay on record: they count in its duration
+                self.load_latest(block)
             return True
         block.state = "waiting"
         if block.auto is None:
