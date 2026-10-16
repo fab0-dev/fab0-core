@@ -332,9 +332,11 @@ def signals(run: Run, result: dict) -> list[tuple[str, str]]:
     return changed
 
 
-def apply(run: Run, only: str | None = None) -> dict:
+def settle(run: Run, only: str | None = None) -> tuple[Run, dict]:
     """Perform what is due, round after round. A round evaluates the run from one read of the tracker; the next
-    reads it again, since the last one changed something."""
+    reads it again, since the last one changed something. Returns the run as its last round evaluated it, with
+    its units, and the result: that evaluation and what was applied. A caller that goes on to hand out units
+    (`next --apply`) uses that evaluation, so the round costs one pass over the tracker."""
     applied: list[dict] = []
     for _ in range(ROUNDS):
         result = run.evaluate()
@@ -370,7 +372,12 @@ def apply(run: Run, only: str | None = None) -> dict:
             if pushed:
                 applied.append({"ledger": pushed})
             applied += [{"item": ref, "signal": text} for ref, text in signals(run, result)]
-            return {**result, "applied": applied}
+            return run, {**result, "applied": applied}
         run.tracker.forget()  # what changed is read again, not answered from the round before
         run = Run(run.w, run.name, run.run, run.actor, run.tracker)
     raise Fail(EXIT_ERROR, f"apply didn't settle after {ROUNDS} rounds", applied=applied)
+
+
+def apply(run: Run, only: str | None = None) -> dict:
+    """What `settle` did, as `apply` prints it."""
+    return settle(run, only)[1]

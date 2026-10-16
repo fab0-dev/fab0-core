@@ -1,0 +1,122 @@
+step: implement
+attempt: 1
+executor: agent
+actor: eugenefurs
+branch: fab0/55/implement-T3
+base:
+  branch: fab0/55/base
+  sha: 34a8b0044a8374c1f82caf44165fc0f939d39f28
+unit: T3
+model: opus
+gate:
+  type: auto
+  merge: auto
+  into: fab0/55/base
+  agent: reviewer
+  decision: escalate
+summary: 'S17 and the spec''s decision on `record` contradict each other. The decision
+  says `record` evaluates the run against a tracker that answers every read with nothing.
+  Taken literally, that breaks `record`: units behind a foreach onStart, or behind
+  a `when` on a tracker condition, drop out of the run. The producer''s workaround
+  (OfflineRun in cli.py) still reads the tracker for a unit behind a tracker `when`,
+  so S17 (''makes no tracker call'') isn''t met for those units. The root fix is in
+  handout.py (take the unit and its context from the saved hand-out) or in schedule.py,
+  and neither file is in T3. A person has to decide whether the workaround is enough,
+  or whether a task gets handout.py or schedule.py.; Someone has to decide who owns
+  S13 for a run with a signal field. That is the normal case: fab0''s own factory
+  sets `tracker.fields.signal: Waiting on`. T1''s tests in tests/test_tracker.py (not
+  a T3 file) lock in that `apply` reads the item twice, first without board entries
+  and then with them (`[False, True]`). As a result, `next --apply` on a quiet round
+  makes two calls more than `status`, not one. A person must say whether T1''s tests
+  change (the cleaner fix: `make_tracker(boards=True)` when the project has a board),
+  or whether T3 only enables board reads for `next --apply` in cli.py.; Two problems
+  the producer can fix also block approval. S13 is not met with a signal field, and
+  a test asserts that wrong behaviour. The skill doesn''t keep S19''s round to four
+  turns.'
+verdict:
+  decision: escalate
+  reasons:
+  - 'S17 and the spec''s decision on `record` contradict each other. The decision
+    says `record` evaluates the run against a tracker that answers every read with
+    nothing. Taken literally, that breaks `record`: units behind a foreach onStart,
+    or behind a `when` on a tracker condition, drop out of the run. The producer''s
+    workaround (OfflineRun in cli.py) still reads the tracker for a unit behind a
+    tracker `when`, so S17 (''makes no tracker call'') isn''t met for those units.
+    The root fix is in handout.py (take the unit and its context from the saved hand-out)
+    or in schedule.py, and neither file is in T3. A person has to decide whether the
+    workaround is enough, or whether a task gets handout.py or schedule.py.'
+  - 'Someone has to decide who owns S13 for a run with a signal field. That is the
+    normal case: fab0''s own factory sets `tracker.fields.signal: Waiting on`. T1''s
+    tests in tests/test_tracker.py (not a T3 file) lock in that `apply` reads the
+    item twice, first without board entries and then with them (`[False, True]`).
+    As a result, `next --apply` on a quiet round makes two calls more than `status`,
+    not one. A person must say whether T1''s tests change (the cleaner fix: `make_tracker(boards=True)`
+    when the project has a board), or whether T3 only enables board reads for `next
+    --apply` in cli.py.'
+  - Two problems the producer can fix also block approval. S13 is not met with a signal
+    field, and a test asserts that wrong behaviour. The skill doesn't keep S19's round
+    to four turns.
+  findings:
+  - check: Scenarios
+    message: 'S13 is not met when the project has a signal field: a quiet `next --apply`
+      makes two calls more than `status` (`user` and a second `item` read with board
+      entries), and the scenario allows one.'
+    location: plugins/fab0/lib/fab0_engine/cli.py:241
+  - check: Tests and checks
+    message: test_a_quiet_round_with_a_signal_field_reads_the_signals_once_too asserts
+      the extra `item` read, so a test now locks in a behaviour that breaks S13 instead
+      of showing the scenario.
+    location: tests/test_round.py:113
+  - check: Scenarios
+    message: 'S17: when the unit isn''t in the offline evaluation (a unit behind a
+      `when` on a tracker condition), `record` falls back to a full evaluation against
+      the real tracker, so it does make tracker calls. Nothing tests that path''s
+      call count or its result.'
+    location: plugins/fab0/lib/fab0_engine/cli.py:316
+  - check: Agreement with the spec
+    message: 'OfflineRun does more than the spec''s decision says: it marks every
+      onStart action as done and leaves tracker-kind inputs out of the stale check.
+      Both change how units are evaluated, beyond ''a tracker that answers every read
+      with nothing''. Only tested fixtures show the ledger entry and result are unchanged
+      (S5/S17).'
+    location: plugins/fab0/lib/fab0_engine/cli.py:218
+  - check: Scenarios
+    message: 'S19: the Checkouts step never tells the session to make every hand-out''s
+      checkout commands in one turn (one message, or chained Bash calls), so ''one
+      turn for the checkouts'' isn''t guaranteed.'
+    location: plugins/fab0/skills/run/SKILL.md:36
+  - check: Scenarios
+    message: 'S19: the Execute step still has the session write each agent''s return
+      file after the agents come back, and the skill places that in neither the agents''
+      turn nor the record-and-commit turn (for example a heredoc chained before `record`),
+      so the round likely takes five turns, not four.'
+    location: plugins/fab0/skills/run/SKILL.md:42
+  - check: Tests and checks
+    message: test_the_skill_runs_a_round_in_four_turns checks only step headings and
+      keywords. It doesn't check that checkouts, or the writing of return files, fit
+      in the four turns S19 names.
+    location: tests/test_round.py:235
+  - check: Scenarios
+    message: 'Note, not blocking: S22 is measured on the release and is not shown.
+      The producer said so, and the spec defers it to the release.'
+  details:
+    unmet:
+    - S13
+    - S17
+    - S19
+    - S22
+    checks_run:
+    - 'uv run pytest -q in the implement-T3 worktree: 293 passed'
+    - 'uv run ruff check: clean'
+    - 'uv run ruff format --check: clean'
+    - 'git diff --name-only: only cli.py, apply.py, skills/run/SKILL.md and tests/test_round.py,
+      all T3 files'
+    met:
+    - S12
+    - S14
+    - S15
+    - S16
+    - S18
+    - S20
+started: '2026-10-16T16:11:09Z'
+ended: '2026-10-16T16:19:51Z'

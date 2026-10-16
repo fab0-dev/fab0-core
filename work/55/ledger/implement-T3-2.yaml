@@ -1,0 +1,69 @@
+step: implement
+attempt: 2
+executor: agent
+actor: eugenefurs
+branch: fab0/55/implement-T3
+unit: T3
+model: sonnet
+base:
+  branch: fab0/55/base
+  sha: 77201bdfe1bec70e3721e3743b627ff50f1dd7ab
+inputs:
+  spec: sha256:d88b5b57cce2b7b09e56c30934de429032ced3cc864fb617127d1baa6ca66d40
+  tasks: sha256:c4e8d973b1dfc582f226f234d70b1969635e1013e0fc4b49dfe03993573b062d
+  unit: sha256:ff69102bddfd92073914a6f127e3c4465e2b07ba90c52a03ee6adfbda3b98352
+  reviews: sha256:2b99c6fb5efb634ca028a25f926d9c5199364c2c9c57b80a18a4d9a64733ddd5
+rework:
+- stale
+claims:
+- core:plugins/fab0/lib/fab0_engine/cli.py
+- core:plugins/fab0/lib/fab0_engine/apply.py
+- core:plugins/fab0/skills/run/SKILL.md
+- core:tests/test_round.py
+gate:
+  type: auto
+summary: "Rework done: all three review decisions are applied. The full suite passes\
+  \ (`uv run pytest -q`: 312 passed, 1 xfailed). `uv run ruff check` and `uv run ruff\
+  \ format` are clean. I ran no `gh` and no real run, so S22 is not shown. It is measured\
+  \ on the release.\n\nWhat changed in this attempt, in `tests/test_round.py` and\
+  \ `plugins/fab0/skills/run/SKILL.md`. `cli.py` and `apply.py` are unchanged.\n\n\
+  1. OfflineRun workaround kept, with a test of its fallback path. The new test is\
+  \ `test_record_of_a_unit_behind_a_tracker_condition_reads_the_tracker_as_status_does`.\n\
+  \   - It uses the triage fixture's `page` unit, which sits behind a `when` on a\
+  \ tracker label.\n   - It records `page` and asserts the tracker calls: some reads,\
+  \ no writes, no repeated read, no `user` call.\n   - The reads equal what `status`\
+  \ makes on the same run, as one evaluation.\n   - The follow-up for `handout.py`\
+  \ or `schedule.py` is not in this change.\n\n2. The second item read with a signal\
+  \ field is now a marked known gap. It is no longer asserted as correct.\n   - `test_a_quiet_round_with_a_signal_field_gives_what_status_gives`\
+  \ asserts only that `user` is among the extra reads and that the unit states equal\
+  \ `status`'s.\n   - `test_a_quiet_round_with_a_signal_field_costs_one_tracker_call_more_than_status`\
+  \ states the S13 target, exactly one call more. It is `xfail(strict=True)` with\
+  \ the reason `KNOWN GAP`: `cli.py` calls `make_tracker()` without `boards=True`,\
+  \ and fixing that needs T1's tests in `tests/test_tracker.py` changed. When the\
+  \ follow-up lands, strict xfail fails and the marker must be removed.\n\n3. S19:\
+  \ all checkouts in one turn, and the return file written inside the record call.\n\
+  \   - `SKILL.md` step 2 now runs every checkout command of the round for every hand-out\
+  \ in one Bash call: one command per line, not chained, so one failure doesn't stop\
+  \ the others.\n   - Step 3 no longer writes return files. The session keeps the\
+  \ agent's JSON, and the tool and command results, for step 4.\n   - A gate command's\
+  \ output is still saved in its step 3 call.\n   - Step 4's per-hand-out call is\
+  \ now `mkdir -p <returns> && cat > <file> <<'FAB0_RETURN' \\ && fab0-resolve record\
+  \ ... \\ && git add && git commit \\ || echo \"failed: exit $?\"`, with the JSON\
+  \ body and the delimiter after it.\n   - The S19 structural test now also checks:\n\
+  \     - step 2 says the round's checkouts are in one Bash call;\n     - step 3 writes\
+  \ no `<returns>/<unit>.json`;\n     - step 4's chain has a quoted heredoc, in the\
+  \ order write, record, commit, echo.\n   - The S20 test now runs this exact form\
+  \ in `bash` for three concurrent hand-outs. The record call writes the return itself.\
+  \ The bad return commits nothing and writes no ledger entry, the other two are committed,\
+  \ and the retry works.\n\nBefore the rework: `next --apply` is built on `settle()`\
+  \ in `apply.py` and `hand_out()` in `cli.py`. `record` runs against `OfflineRun`\
+  \ and `NoTracker`, and redoes the evaluation online only when its unit is missing.\n\
+  \nNo new questions. Gaps for follow-up issues, not in this change:\n- `handout.record`\
+  \ should take its unit and context from the saved hand-out, so `record` never needs\
+  \ the online fallback.\n- `cli.py` should pass `make_tracker(boards=True)` when\
+  \ the project has a board, with T1's two tests in `tests/test_tracker.py` updated.\n\
+  \nFiles are under `/Users/zhen/Work/Fab0/fab0-core/.git/fab0/worktrees/55/implement-T3`:\
+  \ `plugins/fab0/skills/run/SKILL.md` and `tests/test_round.py`. The `.venv` that\
+  \ `uv run` created there is untracked and not part of the change."
+started: '2026-10-16T19:02:30Z'
+ended: '2026-10-16T19:07:34Z'

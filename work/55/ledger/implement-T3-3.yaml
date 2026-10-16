@@ -1,0 +1,55 @@
+step: implement
+attempt: 3
+executor: agent
+actor: eugenefurs
+branch: fab0/55/implement-T3
+unit: T3
+model: sonnet
+base:
+  branch: fab0/55/base
+  sha: 77201bdfe1bec70e3721e3743b627ff50f1dd7ab
+inputs:
+  spec: sha256:d88b5b57cce2b7b09e56c30934de429032ced3cc864fb617127d1baa6ca66d40
+  tasks: sha256:c4e8d973b1dfc582f226f234d70b1969635e1013e0fc4b49dfe03993573b062d
+  unit: sha256:ff69102bddfd92073914a6f127e3c4465e2b07ba90c52a03ee6adfbda3b98352
+  reviews: sha256:2b99c6fb5efb634ca028a25f926d9c5199364c2c9c57b80a18a4d9a64733ddd5
+rework:
+- rejected
+claims:
+- core:plugins/fab0/lib/fab0_engine/cli.py
+- core:plugins/fab0/lib/fab0_engine/apply.py
+- core:plugins/fab0/skills/run/SKILL.md
+- core:tests/test_round.py
+gate:
+  type: auto
+summary: "Rework done: step 4 of the run skill names a return file for each unit and\
+  \ gate again, and the S19 test checks it. I changed only `plugins/fab0/skills/run/SKILL.md`\
+  \ and `tests/test_round.py`. `cli.py` and `apply.py` are unchanged. I ran no `gh`\
+  \ and no real run, so S22 is not shown. It is measured on the release.\n\n1. `SKILL.md`\
+  \ step 4 names the files. A unit's return file is `<returns>/<unit>.json` and a\
+  \ gate's is `<returns>/<unit>-gate.json`. Each hand-out has its own, so a round's\
+  \ concurrent calls never share a path or read each other's return.\n   - The bullets\
+  \ and the template use those names in `cat >` and in `--return`. The command-gate\
+  \ form uses `--gate --exit <code> --output <returns>/<unit>-gate.txt`.\n   - The\
+  \ template uses `<returns>/<unit>.json`. A line after it says that for a gate you\
+  \ use `<returns>/<unit>-gate.json`, `record <run> <unit> --gate` and the gate commit\
+  \ message.\n   - Step 3 still saves a command gate's output to `<returns>/<unit>-gate.txt`,\
+  \ and writes no return file.\n\n2. `test_the_skill_runs_a_round_in_four_turns` is\
+  \ extended. It now checks that:\n   - the chain writes `cat > <returns>/<unit>.json`,\
+  \ and `record` reads it with `--return <returns>/<unit>.json`, in the order write,\
+  \ record, commit, echo;\n   - no unnamed `<file>` is left in step 4;\n   - step\
+  \ 4 names `<returns>/<unit>.json`, `<returns>/<unit>-gate.json` and `<returns>/<unit>-gate.txt`.\n\
+  \   The existing checks stay: step 3 writes no `<returns>/<unit>.json`, and step\
+  \ 2 runs the round's checkouts in one Bash call.\n\nCommands run in the implement-T3\
+  \ worktree:\n- `uv run pytest -q`: 312 passed, 1 xfailed. The xfail is the strict\
+  \ S13 known gap, and `test_a_refused_record_commits_nothing_and_the_others_do` (S20)\
+  \ still passes.\n- `uv run ruff check`: all checks passed.\n- `uv run ruff format\
+  \ --check`: 45 files already formatted.\n\nThe two non-blocking gaps from the review\
+  \ are unchanged and need follow-up issues, not this change:\n- `handout.record`\
+  \ should take its unit from the saved hand-out, so `record` never needs the online\
+  \ fallback.\n- `cli.py` should pass `make_tracker(boards=True)` when the project\
+  \ has a board, with T1's two tests in `tests/test_tracker.py` updated. The strict\
+  \ xfail then fails, and its marker must be removed.\n\nFiles are under `/Users/zhen/Work/Fab0/fab0-core/.git/fab0/worktrees/55/implement-T3`:\
+  \ `plugins/fab0/skills/run/SKILL.md` and `tests/test_round.py`."
+started: '2026-10-16T19:14:00Z'
+ended: '2026-10-16T19:17:16Z'
