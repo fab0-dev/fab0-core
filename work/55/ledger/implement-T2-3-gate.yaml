@@ -1,0 +1,85 @@
+step: implement
+attempt: 3
+executor: agent
+actor: eugenefurs
+branch: fab0/55/implement-T2
+base:
+  branch: fab0/55/base
+  sha: 34a8b0044a8374c1f82caf44165fc0f939d39f28
+unit: T2
+model: opus
+gate:
+  type: auto
+  merge: auto
+  into: fab0/55/base
+  agent: reviewer
+  decision: reject
+summary: 'One of the task''s own tests is flaky. tests/test_concurrency.py::test_the_required_checks_of_units_waiting_to_merge_are_read_with_their_pull_requests
+  failed 2 times in 20 runs on its own, and once in 25 runs of the whole file. It
+  fails with `AssertionError: the checks were asked for together, assert 2 == 3`.
+  The assertion requires exactly 3 overlapping `checks` calls, but that number depends
+  on how the threads are scheduled: the remaining unit pull-request reads compete
+  for the same 4 slots. The attempt-2 summary says this test was made stable. It is
+  not. The producer can fix it within tests/test_concurrency.py, or within schedule.py
+  if the ordering is meant to be guaranteed.; Everything else holds up. On the branch
+  worktree, `uv run pytest` gives 296 passed, `uv run ruff check .` is clean, and
+  `uv run ruff format --check .` is clean. Apart from its ledger entries, the diff
+  touches only the task''s 4 files. The gate-1 finding is resolved: the scout now
+  settles a unit only after the units before it have settled as done, and tests cover
+  the stale-spec case and the case of a unit that isn''t done. The S4 Given was settled
+  on the PR as ''a run with independent units'', and the five-unit test shows 2 to
+  4 calls in flight. The tracker''s 4-request limit is a BoundedSemaphore in Memo._call,
+  held only around the backend call, so the nested gather pools can''t deadlock or
+  go past 4.; S21, measured before the release: I ran `fab0-resolve status 44` from
+  this branch through a logging `gh` wrapper. It made 4 tracker calls and took 3.3
+  s, and its output is byte-identical to origin/fab0/55/base, which also made 4 calls.
+  The formal measurement on the release is still to come, as the spec says.'
+verdict:
+  decision: reject
+  reasons:
+  - 'One of the task''s own tests is flaky. tests/test_concurrency.py::test_the_required_checks_of_units_waiting_to_merge_are_read_with_their_pull_requests
+    failed 2 times in 20 runs on its own, and once in 25 runs of the whole file. It
+    fails with `AssertionError: the checks were asked for together, assert 2 == 3`.
+    The assertion requires exactly 3 overlapping `checks` calls, but that number depends
+    on how the threads are scheduled: the remaining unit pull-request reads compete
+    for the same 4 slots. The attempt-2 summary says this test was made stable. It
+    is not. The producer can fix it within tests/test_concurrency.py, or within schedule.py
+    if the ordering is meant to be guaranteed.'
+  - 'Everything else holds up. On the branch worktree, `uv run pytest` gives 296 passed,
+    `uv run ruff check .` is clean, and `uv run ruff format --check .` is clean. Apart
+    from its ledger entries, the diff touches only the task''s 4 files. The gate-1
+    finding is resolved: the scout now settles a unit only after the units before
+    it have settled as done, and tests cover the stale-spec case and the case of a
+    unit that isn''t done. The S4 Given was settled on the PR as ''a run with independent
+    units'', and the five-unit test shows 2 to 4 calls in flight. The tracker''s 4-request
+    limit is a BoundedSemaphore in Memo._call, held only around the backend call,
+    so the nested gather pools can''t deadlock or go past 4.'
+  - 'S21, measured before the release: I ran `fab0-resolve status 44` from this branch
+    through a logging `gh` wrapper. It made 4 tracker calls and took 3.3 s, and its
+    output is byte-identical to origin/fab0/55/base, which also made 4 calls. The
+    formal measurement on the release is still to come, as the spec says.'
+  findings:
+  - check: Tests
+    message: '`assert in_flight([... ''checks'' ...]) == 3` depends on thread scheduling
+      and fails about 1 time in 10 (2 of 20 isolated runs), with `assert 2 == 3`,
+      because unit pull-request reads still in progress can hold the shared 4 slots
+      when the third `checks` call starts; make the assertion something the code guarantees,
+      or make the code guarantee it.'
+    location: tests/test_concurrency.py:209
+  - check: Agreement with the spec
+    message: 'Minor, not blocking: specs/55.md S4 still reads ''Given the run of S1'',
+      while the test uses five independent units as agreed on the PR; the spec''s
+      owner should update S4''s Given so the spec and the test match.'
+    location: tests/test_concurrency.py:65
+  - check: Quality
+    message: 'Minor, carried over from gate 1: Run.warm runs the real settle() on
+      a copy of each reachable unit, so the walk repeats the git work (ledger reads,
+      conflicts/merge-tree for units waiting to merge) on every evaluation.'
+    location: plugins/fab0/lib/fab0_engine/schedule.py:264
+  details:
+    unmet: []
+    flaky_command: cd /Users/zhen/Work/Fab0/fab0-core/.git/fab0/worktrees/55/implement-T2
+      && for i in $(seq 1 20); do uv run pytest -q -p no:cacheprovider 'tests/test_concurrency.py::test_the_required_checks_of_units_waiting_to_merge_are_read_with_their_pull_requests'
+      | tail -1; done
+started: '2026-10-16T17:49:47Z'
+ended: '2026-10-16T18:07:24Z'

@@ -1,0 +1,90 @@
+step: implement
+attempt: 4
+executor: agent
+actor: eugenefurs
+branch: fab0/55/implement-T2
+base:
+  branch: fab0/55/base
+  sha: 34a8b0044a8374c1f82caf44165fc0f939d39f28
+unit: T2
+model: opus
+gate:
+  type: auto
+  merge: auto
+  into: fab0/55/base
+  agent: reviewer
+  decision: approve
+summary: 'The gate-3 finding is fixed. tests/test_concurrency.py:211 now asserts 2
+  <= in_flight(checks) <= 3, which does not depend on thread scheduling, and the test
+  still checks that exactly 3 checks calls are made, that no read repeats, and that
+  the result and reads match the evaluation without the scout. Ran on its own 30 times
+  in a row, it passed every time. Before this fix it failed 2 times in 20.; Tests
+  and checks, run in /Users/zhen/Work/Fab0/fab0-core/.git/fab0/worktrees/55/implement-T2
+  at 7235562. `uv run pytest`, which defaults to -n auto: 296 passed, 4 times out
+  of 4. `uv run pytest -n 4`: 296 passed. `uv run pytest -n 2 tests/test_concurrency.py`:
+  18 passed. tests/test_concurrency.py alone, 4 runs in a row and 6 runs two at a
+  time: 18 passed every time. `uv run ruff check .` and `uv run ruff format --check
+  .` are clean.; Scope: the code diff touches only the task''s 4 files (schedule.py,
+  artifacts.py, actions.py, tests/test_concurrency.py). The only other files are the
+  run''s own ledger entries under work/55/ledger/.; S4: the five-unit test shows independent
+  reads overlapping (between 2 and 4 in flight) and never more than 4. The same holds
+  for next, apply and inbox. The limit of 4 is enforced by the BoundedSemaphore of
+  MAX_IN_FLIGHT in the tracker adapter (tracker.py:685). S5: the whole existing suite
+  passes unchanged. The new tests compare the result and the set of reads with and
+  without the scout for these cases: ready units, a changed review, a merged unit,
+  a spec that went stale, a blocked dependent, units waiting to merge with checks,
+  a run before its tasks, and a failing read. The order of outputs stays sequential.;
+  S21: the spec puts its measurement on the release that follows the run. Gate 3 already
+  measured it before the release, on this branch: 4 tracker calls in 3.3 s, with output
+  identical to base. The code that measurement ran on has not changed since.'
+verdict:
+  decision: approve
+  reasons:
+  - The gate-3 finding is fixed. tests/test_concurrency.py:211 now asserts 2 <= in_flight(checks)
+    <= 3, which does not depend on thread scheduling, and the test still checks that
+    exactly 3 checks calls are made, that no read repeats, and that the result and
+    reads match the evaluation without the scout. Ran on its own 30 times in a row,
+    it passed every time. Before this fix it failed 2 times in 20.
+  - 'Tests and checks, run in /Users/zhen/Work/Fab0/fab0-core/.git/fab0/worktrees/55/implement-T2
+    at 7235562. `uv run pytest`, which defaults to -n auto: 296 passed, 4 times out
+    of 4. `uv run pytest -n 4`: 296 passed. `uv run pytest -n 2 tests/test_concurrency.py`:
+    18 passed. tests/test_concurrency.py alone, 4 runs in a row and 6 runs two at
+    a time: 18 passed every time. `uv run ruff check .` and `uv run ruff format --check
+    .` are clean.'
+  - 'Scope: the code diff touches only the task''s 4 files (schedule.py, artifacts.py,
+    actions.py, tests/test_concurrency.py). The only other files are the run''s own
+    ledger entries under work/55/ledger/.'
+  - 'S4: the five-unit test shows independent reads overlapping (between 2 and 4 in
+    flight) and never more than 4. The same holds for next, apply and inbox. The limit
+    of 4 is enforced by the BoundedSemaphore of MAX_IN_FLIGHT in the tracker adapter
+    (tracker.py:685). S5: the whole existing suite passes unchanged. The new tests
+    compare the result and the set of reads with and without the scout for these cases:
+    ready units, a changed review, a merged unit, a spec that went stale, a blocked
+    dependent, units waiting to merge with checks, a run before its tasks, and a failing
+    read. The order of outputs stays sequential.'
+  - 'S21: the spec puts its measurement on the release that follows the run. Gate
+    3 already measured it before the release, on this branch: 4 tracker calls in 3.3
+    s, with output identical to base. The code that measurement ran on has not changed
+    since.'
+  findings:
+  - check: Tests
+    message: 'Minor, not blocking: the timing tests (in_flight >= 2, and the span
+      < 0.75 * sum check) fail when the machine is heavily oversubscribed. I ran 8
+      copies of the file at once, each with -n auto on 14 cores; 5 of the 8 failed,
+      once with `assert 2 <= 1` at line 97, so the scout can fall behind the sequential
+      walk entirely. They are stable under normal load and CI-like worker counts.'
+    location: tests/test_concurrency.py:74
+  - check: Agreement with the spec
+    message: 'Minor, carried over: specs/55.md S4''s Given still reads ''the run of
+      S1'', while the test uses five independent units, as agreed on the PR; the spec''s
+      owner should update S4''s Given.'
+    location: tests/test_concurrency.py:65
+  - check: Quality
+    message: 'Minor, carried over: Run.warm runs the real settle() on a copy of each
+      unit it reaches. That repeats the git work (ledger reads, merge-tree for units
+      waiting to merge) on every evaluation.'
+    location: plugins/fab0/lib/fab0_engine/schedule.py:264
+  details:
+    unmet: []
+started: '2026-10-16T18:20:40Z'
+ended: '2026-10-16T18:48:56Z'

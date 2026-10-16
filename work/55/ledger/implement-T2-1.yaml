@@ -1,0 +1,79 @@
+step: implement
+attempt: 1
+executor: agent
+actor: eugenefurs
+branch: fab0/55/implement-T2
+unit: T2
+model: sonnet
+base:
+  branch: fab0/55/base
+  sha: 34a8b0044a8374c1f82caf44165fc0f939d39f28
+inputs:
+  spec: sha256:d88b5b57cce2b7b09e56c30934de429032ced3cc864fb617127d1baa6ca66d40
+  tasks: sha256:c4e8d973b1dfc582f226f234d70b1969635e1013e0fc4b49dfe03993573b062d
+  unit: sha256:65797ff50803b67204f0ddab77f6f65ecfafe706a440b01598efd640b02416da
+  reviews: sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945
+claims:
+- core:plugins/fab0/lib/fab0_engine/schedule.py
+- core:plugins/fab0/lib/fab0_engine/artifacts.py
+- core:plugins/fab0/lib/fab0_engine/actions.py
+- core:tests/test_concurrency.py
+gate:
+  type: auto
+summary: "T2 done: an evaluation now makes its independent tracker reads at the same\
+  \ time, and its result is unchanged. `uv run pytest` passes (292 tests: the 278\
+  \ from before plus 14 new), and `uv run ruff check .` and `uv run ruff format --check\
+  \ .` are clean. I did not run `gh` or `claude plugin validate`, and S21 (run 44\
+  \ on the release) is not measured.\n\nWhat changed, in /Users/zhen/Work/Fab0/fab0-core/.git/fab0/worktrees/55/implement-T2:\n\
+  \n- `plugins/fab0/lib/fab0_engine/schedule.py`:\n  - `Run.evaluate()` starts a small\
+  \ thread pool and submits the run's item read and a `Scout`. Then it runs the unchanged\
+  \ sequential walk, now named `walk_run()`.\n  - `Scout` is a `Run` subclass with\
+  \ no tracker. It walks the pipeline's steps and treats every action and unit as\
+  \ done. For each unit it submits `warm(copy of the unit)`. `warm` loads the unit's\
+  \ ledger records and, only when the unit has a record, runs `settle()`. So the scout\
+  \ starts the exact reads the real pass will make: the unit's pull requests through\
+  \ its inputs, and its required checks.\n  - `state()` is split into `load_latest`\
+  \ plus `settle`. Behaviour is the same.\n  - `Memo` (T1) already shares one read\
+  \ between concurrent callers and allows at most 4 requests at once. The walk therefore\
+  \ finds each answer already read or in flight, so outputs and their order are unchanged.\
+  \ The scout only reads. Failures in the scout or its reads are swallowed and the\
+  \ real pass meets them again. The pool is shut down, cancelling what hasn't started\
+  \ and awaiting what is under way, when `evaluate` returns.\n  - `Run.gather(calls)`\
+  \ returns results in order and raises the first failure in order.\n  - `failing_checks`\
+  \ uses `gather` across a unit's write repositories.\n- `plugins/fab0/lib/fab0_engine/actions.py`:\
+  \ the `pr.open-run` and `pr.ready` checks read each repository's pull request through\
+  \ `gather`. `pr.merge` keeps its message and now reads nothing.\n- `plugins/fab0/lib/fab0_engine/artifacts.py`:\
+  \ `input_hashes` reads the tracker-kind inputs (`issue` and `pr`) through `gather`.\
+  \ The result dict keeps the order of the step's inputs.\n- `tests/test_concurrency.py`\
+  \ (new, 14 tests):\n  - **S4:** a run with 5 implemented units and pull requests,\
+  \ on a 0.3 s fake. `status` has 2 to 4 reads in flight, with the 5 pull request\
+  \ reads overlapping and none repeated. `next`, `apply` and `inbox` are covered the\
+  \ same way.\n  - **S5:** `evaluate()` is compared in process with the scout and\
+  \ with it switched off (a monkeypatch). The result, the order of units and the set\
+  \ of tracker calls are equal. That shows the scout reads only what the evaluation\
+  \ reads anyway. States covered: reviews present, a review removed, a merged unit\
+  \ with others waiting, an unstarted run, and approved units waiting to merge (checks\
+  \ are read together, 3 in flight).\n  - A failing read raises the same `Fail` with\
+  \ and without the scout, and no thread is left behind.\n  - `gather` keeps order,\
+  \ makes every call and raises the first failure in order.\n  - The `pr.ready` check\
+  \ reads two repositories' pull requests together.\n  - `input_hashes` gives the\
+  \ same hashes as the old one-by-one loop.\n  - I checked the tests have teeth: with\
+  \ the scout switched off, the S4 tests fail with 1 in flight.\n\nQuestions: none.\n\
+  \nThings the next person should know:\n\n- **S21 and S4 depend on `cli.py` (T3's\
+  \ file).** `load_run` calls `make_tracker()` without `boards=True`. The story fixture\
+  \ has a board, so `fields` reads make a second `item` call, as T1's summary noted.\
+  \ T3 should pass `boards=True` when the project has a board. This task's own tests\
+  \ don't need it.\n- **S4 on the S1 run.** The unit tests only overlap reads of units\
+  \ that have a record. On the S1 run with only T1 recorded, `status` makes just two\
+  \ sequential calls (the item and T1's pull request), because `pick_pipeline` reads\
+  \ the item before the evaluation. The S4 test therefore uses five recorded units.\n\
+  - **A guess that can be wrong.** The scout assumes units before the one it looks\
+  \ at are done. A unit that has a record while an earlier unit is not done (for example\
+  \ after a spec rework) can cost a wasted read. That read is still shared and counted\
+  \ once.\n- **Not done, out of this task's files:** `inbox.py` evaluates runs one\
+  \ after another, and `apply.py`'s own tracker reads (`unit_pull` and `merge_unit`\
+  \ loops) are still sequential.\n- **Extra git work.** The warm threads load ledger\
+  \ records a second time for each unit, so there is some extra git work. It runs\
+  \ in parallel with the tracker waits."
+started: '2026-10-16T15:49:25Z'
+ended: '2026-10-16T16:09:44Z'
