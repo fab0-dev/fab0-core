@@ -40,7 +40,7 @@ from .artifacts import input_hashes
 from .claims import EVERYTHING, overlap
 from .git import Repo
 from .hashing import sha_json
-from .ledger import DEFAULT_PATH, attempts, entry_name, gate_attempts, parse
+from .ledger import DEFAULT_PATH, attempts, entry_name, gate_attempts, parse, seconds_between, took
 from .templates import Unresolved
 from .wiring import EXECUTORS, Wiring, base_allowed
 
@@ -88,6 +88,15 @@ class Unit:
     def element_id(self) -> str | None:
         return self.ctx.element["id"] if self.ctx.element else None
 
+    def duration(self) -> int | None:
+        """Whole seconds over every recorded attempt and gate decision of the unit, from the ledger's times.
+
+        None when nothing is recorded, or when any of those entries has no times (written before they existed)."""
+        entries = [*self.history, *self.gates.values()]
+        if not entries or not all(e.get("started") and e.get("ended") for e in entries):
+            return None
+        return sum(seconds_between(e["started"], e["ended"]) for e in entries)
+
     def summary(self) -> dict:
         out = {"unit": self.id, "label": self.label, "state": self.state}
         if self.warnings:
@@ -106,6 +115,10 @@ class Unit:
             out["branch"] = self.branch
         if self.step:
             out["attempt"] = self.attempt
+        seconds = self.duration()
+        if seconds is not None:
+            out["duration"] = seconds
+            out["took"] = took(seconds)
         return out
 
 
@@ -336,6 +349,8 @@ class Run:
         self.branch_parents[inner.parent] = ctx.parent
         block = Unit(id=block_id, step=None, label=self.label(node), ctx=ctx, gate=gate, branch=inner.parent)
         self.units.append(block)
+        if block.auto is not None:  # its gate decisions stay on record, whatever its state: they count in its duration
+            self.load_latest(block)
         if not reachable:
             block.reason = reason
             self.walk_block(node, inner, False, {"order": block.label} if reason is None else reason, pos)
@@ -356,7 +371,6 @@ class Run:
             return False
         # a block's gate judges its units as they are now; a unit that moves on asks for a new decision
         block.gate_inputs = sha_json({u.id: u.attempt for u in children})
-        self.load_latest(block)
         latest = block.gates.get(max(block.gates)) if block.gates else None
         if latest is None or latest.get("inputs", {}).get("units") != block.gate_inputs:
             block.attempt = max(block.gates, default=0) + 1

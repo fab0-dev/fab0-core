@@ -1,0 +1,46 @@
+step: implement
+attempt: 3
+executor: agent
+actor: eugenefurs
+branch: fab0/53/implement-T2
+unit: T2
+model: sonnet
+base:
+  branch: fab0/53/base
+  sha: 50aa3c30d708c497e9e56b600b1dc86e065d3cf4
+inputs:
+  spec: sha256:138f8a7481c2aa94e3c4c44cc3114339b6acc3e39c2063b17fbcf0543405cdf3
+  tasks: sha256:c21abe24d4e6597169dac60d85541ead93ee246b829f131cd1ac0a40cb1756db
+  unit: sha256:42c29e6572e8f70c74fd7135eea6d94201f7ace83b7468d8cd7e212ced2d66c0
+  reviews: sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945
+rework:
+- rejected
+claims:
+- core:plugins/fab0/lib/fab0_engine/schedule.py
+- core:tests/test_durations.py
+gate:
+  type: auto
+summary: 'Fixed the rework finding. In `plugins/fab0/lib/fab0_engine/schedule.py`,
+  `walk_node` now calls `load_latest(block)` once for every auto-gated block, right
+  after the block unit is created. That is before the `not reachable` and `not children_done`
+  returns. A block with a recorded gate decision therefore keeps its `duration` and
+  `took` in `status` and `next` whatever its state: open (a unit is reworking), unreachable,
+  waiting or done. I removed the two later `load_latest(block)` calls, on the done
+  path and on the waiting path. The waiting path uses the entries already loaded,
+  and a second call would have appended the history twice. Blocks whose gate is `none`
+  or `human` write no gate entry and still show no duration. Block summaries do not
+  print `attempt`, so loading earlier changes no other output. Test added in `tests/test_durations.py`:
+  `test_a_gated_block_keeps_its_duration_when_a_unit_moves_on`. It uses the docs fixture
+  block `parallel-3` with its command gate (1m 5s). It commits a new `pages.json`
+  on the block branch, so the unit `parallel-3--index` goes stale. The test asserts
+  that the unit asks for a new attempt (`ready` or `running`), the block is `open`,
+  and the block still shows `duration` 65 and `took` `1m 5s`. I checked that this
+  test fails (KeyError on `duration`) with the old `schedule.py` and passes with the
+  fix. The fixture helper `gated_block_with_a_decision` now sets `f.block_tree`, the
+  block''s checkout, so the test can commit there. The unreachable path has no test
+  of its own; it goes through the same single `load_latest` call. Commands run in
+  the T2 worktree: `uv run pytest -q` gave 249 passed; `uv run ruff check .` was clean;
+  `uv run ruff format --check .` was clean. Only `plugins/fab0/lib/fab0_engine/schedule.py`
+  and `tests/test_durations.py` changed. Process slip: I ran `git stash` once by mistake
+  while checking something, then ran `git stash pop` straight away. The working tree
+  is restored and `git stash list` is empty.'
