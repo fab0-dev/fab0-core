@@ -20,7 +20,8 @@ def load_schema(path: Path) -> dict:
 
 
 def core_schema(name: str) -> dict:
-    """A core schema by name: `project`, `pipeline`, `step`, `artifact`, `verdict`, `return`, `ledger-entry`."""
+    """A core schema by name: `project`, `pipeline`, `step`, `artifact`, `verdict`, `return`, `ledger-entry`,
+    `event`."""
     return load_schema(SCHEMAS / f"{name}.json")
 
 

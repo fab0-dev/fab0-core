@@ -9,6 +9,8 @@ One call loops until nothing more can be done:
 - the ledger branch, if the pipeline keeps one, is pushed;
 - with `tracker.fields.signal` set, the run's item and its elements' items show their state on the board.
 
+What it did, and where the run waits on a person or is blocked, goes to the run's event log (`events`).
+
 Each operation is idempotent: its check comes first, so running `apply` twice changes nothing the second time.
 """
 
@@ -16,6 +18,7 @@ from __future__ import annotations
 
 from .actions import check, child_titles, element_items, written
 from .errors import EXIT_ERROR, Fail
+from .events import EventLog, state_line
 from .git import Writer
 from .schedule import Run, Unit
 from .templates import render
@@ -292,15 +295,17 @@ def publish_ledger(run: Run) -> str | None:
 
 
 def describe(unit: Unit) -> str:
-    """One line for the board: a unit's state, and why."""
-    parts = []
-    for key, value in (unit.reason or {}).items():
-        if isinstance(value, list):
-            value = ", ".join(map(str, value))
-        elif isinstance(value, dict):
-            value = ", ".join(f"{k} {v}" for k, v in value.items())
-        parts.append(f"{key} {value}")
-    return f"{unit.state}: {unit.id}" + (f" ({'; '.join(parts)})" if parts else "")
+    """One line for the board: a unit's state, and why. The event log words its state events the same way."""
+    return state_line(unit.state, unit.id, unit.reason)
+
+
+def log_events(run: Run, applied: list[dict], settled: dict | None = None) -> list[str]:
+    """What `apply` did, and where the run stands, in the run's event log; returns why that failed, if it did."""
+    log = EventLog(run)
+    log.applied(applied)
+    if settled is not None:
+        log.states(settled)
+    return log.warnings
 
 
 def signals(run: Run, result: dict) -> list[tuple[str, str]]:
@@ -332,6 +337,16 @@ def signals(run: Run, result: dict) -> list[tuple[str, str]]:
 
 def apply(run: Run, only: str | None = None) -> dict:
     applied: list[dict] = []
+    try:
+        return settle(run, only, applied)
+    except Fail as fail:  # what was done before it stopped is logged too
+        warnings = log_events(run, applied) if applied and "applied" not in fail.payload else []
+        if warnings:
+            fail.payload["warnings"] = [*fail.payload.get("warnings", []), *warnings]
+        raise
+
+
+def settle(run: Run, only: str | None, applied: list[dict]) -> dict:
     for _ in range(ROUNDS):
         result = run.evaluate()
         progress = False
@@ -366,6 +381,16 @@ def apply(run: Run, only: str | None = None) -> dict:
             if pushed:
                 applied.append({"ledger": pushed})
             applied += [{"item": ref, "signal": text} for ref, text in signals(run, result)]
-            return {**result, "applied": applied}
+            out = {**result, "applied": applied}
+            warnings = log_events(run, applied, result)  # a log that can't be written is a warning, nothing more
+            if warnings:
+                out["warnings"] = [*result.get("warnings", []), *warnings]
+            return out
         run = Run(run.w, run.name, run.run, run.actor, run.tracker)  # read everything again
-    raise Fail(EXIT_ERROR, f"apply didn't settle after {ROUNDS} rounds", applied=applied)
+    warnings = log_events(run, applied)
+    raise Fail(
+        EXIT_ERROR,
+        f"apply didn't settle after {ROUNDS} rounds",
+        applied=applied,
+        **({"warnings": warnings} if warnings else {}),
+    )

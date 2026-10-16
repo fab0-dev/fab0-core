@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "fab0 run event, schema 2 (<home git dir>/fab0/events/<run>.jsonl)",
+  "description": "One line of a run's event log: what the engine did or found, and when. The log is local to the machine that runs the engine, append-only, and never committed. An event holds only what the engine's lines and states already show.",
+  "type": "object",
+  "required": ["time", "kind", "line"],
+  "additionalProperties": false,
+  "properties": {
+    "time": {
+      "description": "When it happened, UTC (RFC 3339, whole seconds), as the ledger keeps times.",
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+    },
+    "kind": {
+      "description": "`handout` and `record` for a unit, `gate` for an auto gate's decision, `apply` for what `apply` did, `waiting` for a unit that waits on a person, `blocked` for one held back by a signal.",
+      "enum": ["handout", "record", "gate", "apply", "waiting", "blocked"]
+    },
+    "line": {"description": "What a person reads: the command's own line, or the board's signal for a state.", "type": "string", "minLength": 1},
+    "unit": {"type": "string", "minLength": 1},
+    "attempt": {"type": "integer", "minimum": 1},
+    "reason": {"description": "A state event's reason, as the line shows it.", "type": "string", "minLength": 1}
+  }
+}

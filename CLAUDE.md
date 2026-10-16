@@ -9,8 +9,8 @@ The `fab0` marketplace and core plugin. The product's home repo is `fab0-dev/fab
   - it runs through `uv run --script`, with PEP 723 inline dependencies (`pyyaml`, `jsonschema`);
   - it lands on the Bash `PATH` when the plugin is enabled;
   - it puts `plugins/fab0/lib/` on `sys.path` and calls `fab0_engine.cli.main`.
-- `plugins/fab0/lib/fab0_engine/` is the engine, one module per concern: `wiring` (load and cross-check), `schedule` (units and their states), `handout` (hand-outs, briefs, `record`), `gates` (gate hand-outs and verdicts), `actions` (the read-only check of every catalogue action), `apply` (performing actions, merges and pull requests), `artifacts` (reading, hashing and checking every kind), `hashing`, `ledger`, `claims`, `git`, `tracker` (facts, and the writes `apply` makes), `inbox`, `templates`, `schemas`, `catalogue`, `merge`, `version`, `cli`. It finds the plugin's schemas and manifest relative to itself.
-- `plugins/fab0/schemas/` holds the schema 2 JSON Schemas: `project`, `pipeline`, `step`, `artifact`, `verdict`, `return`, `ledger-entry`.
+- `plugins/fab0/lib/fab0_engine/` is the engine, one module per concern: `wiring` (load and cross-check), `schedule` (units and their states), `handout` (hand-outs, briefs, `record`), `gates` (gate hand-outs and verdicts), `actions` (the read-only check of every catalogue action), `apply` (performing actions, merges and pull requests), `artifacts` (reading, hashing and checking every kind), `hashing`, `ledger`, `events` (the run's event log), `claims`, `git`, `tracker` (facts, and the writes `apply` makes), `inbox`, `templates`, `schemas`, `catalogue`, `merge`, `version`, `cli`. It finds the plugin's schemas and manifest relative to itself.
+- `plugins/fab0/schemas/` holds the schema 2 JSON Schemas: `project`, `pipeline`, `step`, `artifact`, `verdict`, `return`, `ledger-entry`, `event`.
 - `plugins/fab0/skills/` holds plain Claude Code skills. `/fab0:run` executes hand-outs and never decides; every word fab0 needs to pass to an agent goes in the brief the engine renders, so any agent can be a step (P1).
 - Core ships no agents (P0). Agents belong to factories; the examples repo has them.
 - `tests/` drive the engine against copies of the fixture factories in `tests/fixtures/` (`story`, `docs`, `triage`), through the shim, and import `fab0_engine` modules directly for unit tests.
@@ -18,7 +18,7 @@ The `fab0` marketplace and core plugin. The product's home repo is `fab0-dev/fab
 ## Conventions
 
 - Python 3.12+, standard library plus `pyyaml` and `jsonschema`. No other runtime dependency.
-- The engine is deterministic. Only `apply` writes to git refs and the tracker (D5 in the home repo's `DECISIONS.md`); `record` writes only ledger files in a unit's checkout, and `next` only creates a unit's branch when it claims the unit. `apply` changes branches through plumbing, or in their checkout only when it is clean, so nobody's work moves.
+- The engine is deterministic. Only `apply` writes to git refs and the tracker (D5 in the home repo's `DECISIONS.md`); `record` writes only ledger files in a unit's checkout, and `next` only creates a unit's branch when it claims the unit. The one other thing the engine writes is a run's event log under the home repo's git directory (`next`, `record` and `apply` append; the other commands never write it); it stays on the machine, and a log that can't be written is a warning, never a failed command. `apply` changes branches through plumbing, or in their checkout only when it is clean, so nobody's work moves.
 - Every command prints one JSON object. Exit codes: 0 ok, 1 error, 2 usage, 3 invalid wiring, 4 refused.
 - Ids and ledger names are never zero-padded.
 - Schemas are JSON Schema 2020-12.

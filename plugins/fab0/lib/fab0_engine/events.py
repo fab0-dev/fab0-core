@@ -1,0 +1,192 @@
+"""A run's event log: what the engine handed out, recorded, did and found, and when.
+
+The log is `<home git common dir>/fab0/events/<run>.jsonl`, beside the pending hand-outs: one JSON object per
+line, append-only, shared by every checkout of the home repo and every process on the machine, and outside every
+branch, so writing it moves nothing in git. An event holds only what the engine's lines and states already show.
+
+Only `next`, `record` and `apply` write. A failed write never changes a command's result: it becomes a warning.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+from pathlib import Path
+
+from .ledger import now
+from .schedule import Run
+from .schemas import core_schema, schema_errors
+
+STATES = ("waiting", "blocked")  # the kinds of a state event
+HUMAN = ("questions", "escalated")  # reasons a unit waits on a person, besides a human gate
+
+
+def events_path(run: Run) -> Path:
+    return run.home.common_dir() / "fab0" / "events" / f"{run.run}.jsonl"
+
+
+def read_events(path: Path) -> list[dict]:
+    """The complete, valid events of a log, oldest first. A last line without its end is still being written,
+    and a line that isn't an event is skipped."""
+    try:
+        data = path.read_bytes()
+    except OSError:
+        return []
+    found = []
+    for raw in data.split(b"\n")[:-1]:  # what follows the last newline is not a complete line
+        try:
+            event = json.loads(raw)
+        except ValueError:
+            continue
+        if isinstance(event, dict) and not schema_errors(event, core_schema("event")):
+            found.append(event)
+    return found
+
+
+def append_event(path: Path, event: dict) -> None:
+    """Add one event as one complete line in one write, so commands running at once never interleave."""
+    errors = schema_errors(event, core_schema("event"))
+    if errors:
+        raise ValueError(f"invalid event: {'; '.join(errors)}")
+    data = (json.dumps(event, separators=(",", ":")) + "\n").encode()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
+    try:
+        if os.write(fd, data) != len(data):
+            raise OSError("short write")
+    finally:
+        os.close(fd)
+
+
+def reason_text(reason: dict | None) -> str:
+    """A reason as the board and the log show it: `gate human`, `tracker acme/shop#9`."""
+    parts = []
+    for key, value in (reason or {}).items():
+        if isinstance(value, list):
+            value = ", ".join(map(str, value))
+        elif isinstance(value, dict):
+            value = ", ".join(f"{k} {v}" for k, v in value.items())
+        parts.append(f"{key} {value}")
+    return "; ".join(parts)
+
+
+def state_line(state: str, unit: str, reason: dict | None) -> str:
+    """One line for a state: `waiting: spec (gate human)`."""
+    text = reason_text(reason)
+    return f"{state}: {unit}" + (f" ({text})" if text else "")
+
+
+def apply_text(entry: dict) -> tuple[str, str | None]:
+    """An entry of `apply`'s `applied` as the line of its event, and its unit, if it has one."""
+    if "ledger" in entry:
+        return f"apply: ledger: {entry['ledger']}", None
+    if "item" in entry:
+        return f"apply: {entry['item']}: signal {entry['signal']}", None
+    unit = entry["unit"]
+    if "action" in entry:
+        said = f"{entry['action']}: {entry['did']}"
+    else:
+        said = next(entry[k] for k in ("merge", "pull", "sync") if k in entry)
+    return f"apply: {unit}: {said}", unit
+
+
+def subject(event: dict) -> tuple[str, str]:
+    """What an `apply` event is about: its unit, or else its item or the ledger."""
+    if event.get("unit"):
+        return "unit", event["unit"]
+    return "other", event["line"].split(": ")[1] if event["line"].count(": ") > 1 else event["line"]
+
+
+class EventLog:
+    """The events of one command of one run. Every method that writes keeps failing quietly: `warnings` says
+    why, and the command's result stays what it would be without a log."""
+
+    def __init__(self, run: Run):
+        self.run = run
+        self.warnings: list[str] = []
+        self.failed = False
+        self._path: Path | None = None
+
+    def path(self) -> Path:
+        if self._path is None:
+            self._path = events_path(self.run)
+        return self._path
+
+    def fail(self, exc: Exception) -> None:
+        self.failed = True
+        self.warnings.append(f"the run's event couldn't be logged: {exc}")
+
+    def add(self, kind: str, line: str, **fields) -> bool:
+        if self.failed:
+            return False
+        event = {"time": now(), "kind": kind, "line": line, **{k: v for k, v in fields.items() if v is not None}}
+        try:
+            append_event(self.path(), event)
+        except (OSError, ValueError) as exc:
+            self.fail(exc)
+            return False
+        return True
+
+    def existing(self) -> list[dict]:
+        if self.failed:
+            return []
+        try:
+            return read_events(self.path())
+        except OSError as exc:
+            self.fail(exc)
+            return []
+
+    def handouts(self, outs: list[dict]) -> None:
+        """One event per hand-out of a unit or a gate; an action's hand-out has no line and adds none."""
+        for out in outs:
+            if out.get("line"):
+                self.add("handout", out["line"], unit=out["unit"], attempt=out.get("attempt"))
+
+    def recorded(self, result: dict) -> None:
+        """The result of `record`, or of `record --gate`: its end line as the command returned it."""
+        self.add(
+            "gate" if result.get("gate") else "record", result["line"], unit=result["unit"], attempt=result["attempt"]
+        )
+
+    def applied(self, applied: list[dict]) -> None:
+        """One event per entry of `apply`'s `applied`, in order, except an entry that repeats the last event
+        about the same unit, item or ledger: `apply` reports a merge that waits for checks every time."""
+        if not applied:
+            return
+        last: dict[tuple[str, str], str] = {}
+        for event in self.existing():
+            if event["kind"] == "apply":
+                last[subject(event)] = event["line"]
+        for entry in applied:
+            line, unit = apply_text(entry)
+            key = subject({"unit": unit, "line": line})
+            if last.get(key) == line:
+                continue
+            if self.add("apply", line, unit=unit):
+                last[key] = line
+
+    def states(self, result: dict) -> None:
+        """The units that wait on a person or are blocked by a signal, and the run waiting for the merge of its
+        own pull requests: one event each time its state, reason and attempt differ from its last state event."""
+        from .inbox import SIGNALS  # not at the top: the inbox reads events too
+
+        due: list[tuple[str, str, dict, int | None]] = []
+        for unit in self.run.units:
+            reason = unit.reason or {}
+            if unit.state == "waiting" and (reason.get("gate") == "human" or set(reason) & set(HUMAN)):
+                due.append(("waiting", unit.id, reason, unit.attempt if unit.step else None))
+            elif unit.state == "blocked" and set(reason) & set(SIGNALS):
+                due.append(("blocked", unit.id, reason, unit.attempt if unit.step else None))
+        if result.get("kind") == "waiting" and self.run.run_branch:
+            due.append(("waiting", self.run.run_branch, result.get("reason") or {}, None))
+        if not due:
+            return
+        last: dict[str, tuple] = {}
+        for event in self.existing():
+            if event["kind"] in STATES and event.get("unit"):
+                last[event["unit"]] = (event["kind"], event.get("reason"), event.get("attempt"))
+        for kind, unit, reason, attempt in due:
+            text = reason_text(reason)
+            if last.get(unit) == (kind, text or None, attempt):
+                continue
+            self.add(kind, state_line(kind, unit, reason), unit=unit, attempt=attempt, reason=text or None)

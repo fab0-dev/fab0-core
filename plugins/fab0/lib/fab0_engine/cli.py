@@ -22,6 +22,7 @@ from pathlib import Path
 
 from .apply import apply as apply_run
 from .errors import EXIT_ERROR, EXIT_INVALID, EXIT_OK, EXIT_REFUSED, EXIT_USAGE, Fail
+from .events import EventLog
 from .gates import gate_handout, record_gate, save_gate_pending
 from .handout import action_handout, claim, handout, record, save_pending
 from .inbox import inbox
@@ -171,6 +172,7 @@ def cmd_next(args) -> dict:
     run = load_run(args)
     result = run.evaluate()
     handouts = []
+    log = EventLog(run)  # each hand-out is logged as it is made; a log that fails only adds a warning
     for unit in run.units:
         if args.unit and unit.id != args.unit:
             continue
@@ -183,15 +185,19 @@ def cmd_next(args) -> dict:
                 continue
             out = handout(run, unit)
             save_pending(run, unit, out)
+            log.handouts([out])
             handouts.append(out)
         elif unit.state == "waiting" and unit.auto and (unit.reason or {}).get("gate") in ("gate", "running"):
             out = gate_handout(run, unit)
             save_gate_pending(run, unit, out)
+            log.handouts([out])
             handouts.append(out)
     if args.unit and not handouts:
         found = next((u.summary() for u in run.units if u.id == args.unit), None)
         raise Fail(EXIT_REFUSED, f"{args.unit} is not ready", unit=found)
     result["units"] = [u.summary() for u in run.units]  # claims made just now may have changed a state
+    log.states(result)
+    WARNINGS.extend(log.warnings)
     return {**result, "handouts": handouts}
 
 
@@ -206,8 +212,13 @@ def cmd_record(args) -> dict:
     run.evaluate()
     if args.gate:
         output = Path(args.output).read_text(errors="replace") if args.output else None
-        return record_gate(run, args.unit, returned, args.exit, output)
-    return record(run, args.unit, returned, args.exit)
+        result = record_gate(run, args.unit, returned, args.exit, output)
+    else:
+        result = record(run, args.unit, returned, args.exit)
+    log = EventLog(run)  # after the ledger entry; a refused record raised above and logs nothing
+    log.recorded(result)
+    WARNINGS.extend(log.warnings)
+    return result
 
 
 def cmd_apply(args) -> dict:
