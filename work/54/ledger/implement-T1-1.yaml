@@ -1,0 +1,87 @@
+step: implement
+attempt: 1
+executor: agent
+actor: eugenefurs
+branch: fab0/54/implement-T1
+unit: T1
+model: sonnet
+base:
+  branch: fab0/54/base
+  sha: 44a27cc573e5a562ca1e7658c747d246f16d1047
+inputs:
+  spec: sha256:4c43401c933fedb45ba0b1caa2937018bc445e6957d7767d6741e55ef2e165b3
+  tasks: sha256:4744ae74db89e9f4a1260695f6f7b6cccd018a23a8de8b44c932c2a33aba912e
+  unit: sha256:a9acb85694b00f71f8cdbc904f7cbaa2f42430e1528ef55f7b5a955d037751b6
+  reviews: sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945
+claims:
+- core:plugins/fab0/lib/fab0_engine/events.py
+- core:plugins/fab0/schemas/event.json
+- core:plugins/fab0/lib/fab0_engine/schemas.py
+- core:plugins/fab0/lib/fab0_engine/cli.py
+- core:plugins/fab0/lib/fab0_engine/apply.py
+- core:tests/test_events.py
+- core:README.md
+- core:CLAUDE.md
+gate:
+  type: auto
+summary: "T1 is done: the engine now keeps a per-run event log, and `next`, `record`\
+  \ and `apply` write it. All 266 tests pass, including 18 new ones. Ruff and the\
+  \ plugin validation pass.\n\nChanges (all in /Users/zhen/Work/Fab0/fab0-core/.git/fab0/worktrees/54/implement-T1):\n\
+  - New `plugins/fab0/schemas/event.json`. An event has `time` (UTC, whole seconds),\
+  \ `kind` (handout, record, gate, apply, waiting, blocked) and `line`. It may also\
+  \ have `unit`, `attempt` and `reason`, and nothing else is allowed.\n- New `plugins/fab0/lib/fab0_engine/events.py`.\n\
+  \  - Each event is checked against the schema, then appended as one JSON line in\
+  \ one `os.write` with `O_APPEND`, to `<home git common dir>/fab0/events/<run>.jsonl`.\n\
+  \  - `read_events` ignores a last line without its newline and lines that aren't\
+  \ valid events.\n  - `EventLog` writes the events and collects one warning, \"the\
+  \ run's event couldn't be logged: <why>\", if a write fails.\n  - Hand-outs: one\
+  \ event per unit or gate hand-out, with the hand-out's own line. An action hand-out\
+  \ adds none.\n  - Records: one event with `record`'s own line, kind `record`, or\
+  \ `gate` for `record --gate`.\n  - `apply`: one event per entry of `applied`, in\
+  \ order, reading `apply: <unit>: <what it says>` (S4). An entry identical to the\
+  \ last `apply` event about the same unit, item or ledger is skipped, which makes\
+  \ a merge waiting for checks log once (S5).\n  - State events: `waiting` for a human\
+  \ gate, questions, an escalation, or the run's own pull request. `blocked` for the\
+  \ inbox's signals. One is written only when the unit's kind, reason and attempt\
+  \ differ from its last state event.\n  - The state line is built by a shared `state_line`,\
+  \ which `apply.describe` now also uses, so the board's text is unchanged. `SIGNALS`\
+  \ is imported from `inbox` inside the function, so T3 can import `events` from `inbox`\
+  \ without a cycle.\n- `cli.py`:\n  - `cmd_next` logs each hand-out right after it\
+  \ is saved, then the state events after the claims.\n  - `cmd_record` logs after\
+  \ the ledger entry is written. A refused record raises before that, so it adds nothing\
+  \ (S3).\n  - Log warnings go into `WARNINGS`, so `main` puts them in the result,\
+  \ and the exit code never changes.\n- `apply.py`: `apply` is split into `apply`\
+  \ and `settle`.\n  - It logs the `applied` entries and then the state events from\
+  \ its last evaluation.\n  - It also logs the entries when apply stops with a Fail,\
+  \ and adds the warning to that Fail.\n  - The \"didn't settle\" Fail keeps its existing\
+  \ `applied` field.\n- `schemas.py` (docstring only), `README.md` and `CLAUDE.md`\
+  \ (events module, `event` schema, and the engine writing a machine-local log) are\
+  \ updated.\n- The log's location and the shape of read-only commands are untouched:\
+  \ `status`, `inbox`, `validate` and `log` never write.\n\nTests, in `tests/test_events.py`,\
+  \ cover S1 to S9:\n- schema validation, reading that skips partial and invalid lines,\
+  \ and one write per event;\n- hand-outs (an action adds none, and a gate hand-out\
+  \ is logged), records (verified or not) and gate decisions with `record`'s exact\
+  \ lines;\n- a refused record adds nothing;\n- `apply` events in order, with nothing\
+  \ added when it did nothing;\n- a merge waiting for checks logged once over three\
+  \ applies;\n- waiting on a human gate logged once, a new attempt that waits again\
+  \ logged again (questions, then an input change), an escalation, and the run's own\
+  \ pull request waiting;\n- a task blocked by a tracker item logged, and a unit waiting\
+  \ its turn not logged;\n- `status`, `inbox` and `validate` leave the log unchanged\
+  \ and create none;\n- an unwritable log (a file where the events folder would be)\
+  \ gives one warning each on `next`, `record` and `apply`, the same results and exit\
+  \ codes, and nothing moves in git.\n\nCommands run:\n- `uv run pytest`: 266 passed.\n\
+  - `uv run ruff check` and `uv run ruff format --check`: clean.\n- `claude plugin\
+  \ validate --strict .` and `claude plugin validate --strict plugins/fab0`: passed.\
+  \ I did not run the `plugins/fab0/skills` validation, and I did not run `scripts/e2e-triage.py`\
+  \ (it costs tokens, and no skill, hand-out or brief changed).\n\nNotes for the other\
+  \ tasks:\n- I did not add `follow` to `apply`'s result or touch `/fab0:run`. S19\
+  \ belongs to T2, whose files include `cli.py` and `events.py`.\n- `inbox`'s `latest`\
+  \ and `fab0-resolve log` are T3 and T2. `events.read_events` and `events_path` are\
+  \ there for them to reuse; the log reader must split on a newline and ignore a last\
+  \ line without one.\n- Two limits come from the spec's wording. A unit blocked by\
+  \ the same signal again at the same attempt, after being unblocked, is not logged\
+  \ again. A refused record adds no event, but the run's state events are still logged\
+  \ by the next `next` or `apply`.\n\nQuestions: none. Every scenario of the spec\
+  \ is delivered by one of T1 to T4."
+started: '2026-10-16T15:01:23Z'
+ended: '2026-10-16T15:22:54Z'
