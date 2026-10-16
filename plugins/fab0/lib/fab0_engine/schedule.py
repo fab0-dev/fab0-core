@@ -349,6 +349,8 @@ class Run:
         self.branch_parents[inner.parent] = ctx.parent
         block = Unit(id=block_id, step=None, label=self.label(node), ctx=ctx, gate=gate, branch=inner.parent)
         self.units.append(block)
+        if block.auto is not None:  # its gate decisions stay on record, whatever its state: they count in its duration
+            self.load_latest(block)
         if not reachable:
             block.reason = reason
             self.walk_block(node, inner, False, {"order": block.label} if reason is None else reason, pos)
@@ -362,8 +364,6 @@ class Run:
         on_parent = all(self.on_branch(u, ctx.parent) for u in children)
         if on_parent:
             block.state, block.reason = "done", None
-            if block.auto is not None:  # its gate decisions stay on record: they count in its duration
-                self.load_latest(block)
             return True
         block.state = "waiting"
         if block.auto is None:
@@ -371,7 +371,6 @@ class Run:
             return False
         # a block's gate judges its units as they are now; a unit that moves on asks for a new decision
         block.gate_inputs = sha_json({u.id: u.attempt for u in children})
-        self.load_latest(block)
         latest = block.gates.get(max(block.gates)) if block.gates else None
         if latest is None or latest.get("inputs", {}).get("units") != block.gate_inputs:
             block.attempt = max(block.gates, default=0) + 1

@@ -109,6 +109,7 @@ def gated_block_with_a_decision(factory):
     retime(tree, "parallel-3-1-gate.yaml", "2026-10-15T10:00:00Z", "2026-10-15T10:01:05Z", run="docs-1")
     git(tree, "add", "-A")
     git(tree, "commit", "-q", "--amend", "--no-edit")
+    f.block_tree = tree
     return f
 
 
@@ -124,4 +125,16 @@ def test_a_gated_block_keeps_its_duration_once_it_is_done(factory):
     f.merge("home", "docs/docs-1--parallel-3", "docs/docs-1")
     block = unit_of(f.run("status", "docs-1"), "parallel-3")
     assert block["state"] == "done"
+    assert (block["duration"], block["took"]) == (65, "1m 5s")
+
+
+def test_a_gated_block_keeps_its_duration_when_a_unit_moves_on(factory):
+    f = gated_block_with_a_decision(factory)
+    block_tree = f.block_tree
+    (block_tree / "work" / "docs-1" / "pages.json").write_text('["intro"]')  # an input of a unit moves on
+    git(block_tree, "commit", "-qam", "a new page")
+    res = f.run("status", "docs-1")
+    assert unit_of(res, "parallel-3--index")["state"] in ("ready", "running"), "the unit asks for a new attempt"
+    block = unit_of(res, "parallel-3")
+    assert block["state"] == "open"
     assert (block["duration"], block["took"]) == (65, "1m 5s")
