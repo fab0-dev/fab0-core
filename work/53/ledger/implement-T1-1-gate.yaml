@@ -1,0 +1,73 @@
+step: implement
+attempt: 1
+executor: agent
+actor: eugenefurs
+branch: fab0/53/implement-T1
+base:
+  branch: fab0/53/base
+  sha: 3d4e80790701617b6b9d45378ca23375b41a0a89
+unit: T1
+model: opus
+gate:
+  type: auto
+  merge: auto
+  into: fab0/53/base
+  agent: reviewer
+  decision: approve
+summary: 'Every T1 scenario has code and a test. S1: agent and rework start lines.
+  S2: gate, command-gate and tool lines, and no line for actions. S4: times, duration
+  and the verified end line. S5: not verified with the failed check names. S6: rejected,
+  approved and escalated, plus the command gate''s exit code. S7: entry times match
+  the schema''s UTC pattern. S8: a refused record keeps the pending start. S9: a repeated
+  next resets the start. S10: pending files and entries without times are handled.;
+  The change follows the spec''s decisions. next stamps `started` in save_pending
+  and save_gate_pending, and record stamps `ended`. Because the session adds worktrees
+  after next, checkout time is counted in. Results carry started/ended/duration/took/line,
+  and the ledger has optional started/ended with no duration. There is one formatter,
+  `ledger.took`. Durations are clamped to zero or more. All changes are additions:
+  no existing field is renamed or removed.; Scope: only the five task files changed,
+  plus the engine-written ledger entry work/53/ledger/implement-T1-1.yaml, which is
+  excluded by design.; In /Users/zhen/Work/Fab0/fab0-core/.git/fab0/worktrees/53/implement-T1:
+  `uv run pytest` passed (240), `uv run ruff check` and `ruff format --check` were
+  clean, and `claude plugin validate --strict plugins/fab0` passed.'
+verdict:
+  decision: approve
+  reasons:
+  - 'Every T1 scenario has code and a test. S1: agent and rework start lines. S2:
+    gate, command-gate and tool lines, and no line for actions. S4: times, duration
+    and the verified end line. S5: not verified with the failed check names. S6: rejected,
+    approved and escalated, plus the command gate''s exit code. S7: entry times match
+    the schema''s UTC pattern. S8: a refused record keeps the pending start. S9: a
+    repeated next resets the start. S10: pending files and entries without times are
+    handled.'
+  - 'The change follows the spec''s decisions. next stamps `started` in save_pending
+    and save_gate_pending, and record stamps `ended`. Because the session adds worktrees
+    after next, checkout time is counted in. Results carry started/ended/duration/took/line,
+    and the ledger has optional started/ended with no duration. There is one formatter,
+    `ledger.took`. Durations are clamped to zero or more. All changes are additions:
+    no existing field is renamed or removed.'
+  - 'Scope: only the five task files changed, plus the engine-written ledger entry
+    work/53/ledger/implement-T1-1.yaml, which is excluded by design.'
+  - 'In /Users/zhen/Work/Fab0/fab0-core/.git/fab0/worktrees/53/implement-T1: `uv run
+    pytest` passed (240), `uv run ruff check` and `ruff format --check` were clean,
+    and `claude plugin validate --strict plugins/fab0` passed.'
+  findings:
+  - check: Tests and checks
+    message: The repo's CLAUDE.md asks for `uv run python scripts/e2e-triage.py` after
+      a hand-out change, and neither the producer nor this review ran it because it
+      costs tokens. The change only adds a `line` key and a `started` field to pending
+      files, so the risk is low, but the e2e check must run by T3 at the latest, since
+      T3 changes the run skill.
+    location: /Users/zhen/Work/Fab0/fab0-core/.git/fab0/worktrees/53/implement-T1/CLAUDE.md:40
+  - check: Scenarios
+    message: S5 names two failed checks together, the output's name and `claims:core`,
+      but the test only covers a single `claims:backend` failure. The code joins all
+      failed names in sorted order, so a line with both names should still come out
+      right; it just isn't tested.
+    location: /Users/zhen/Work/Fab0/fab0-core/.git/fab0/worktrees/53/implement-T1/tests/test_timing.py:150
+  - check: Quality
+    message: '`seconds_between` raises ValueError when a pending `started` value doesn''t
+      parse, for example after a hand edit. That would crash `record` after the entry
+      is written but before it returns. The spec doesn''t name this case, so it doesn''t
+      block.'
+    location: /Users/zhen/Work/Fab0/fab0-core/.git/fab0/worktrees/53/implement-T1/plugins/fab0/lib/fab0_engine/ledger.py:56
