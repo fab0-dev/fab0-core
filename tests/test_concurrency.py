@@ -206,7 +206,9 @@ def test_the_required_checks_of_units_waiting_to_merge_are_read_with_their_pull_
     assert [states(res)[f"implement-T{n}"] for n in (1, 2, 3)] == [("waiting", {"gate": "merge"})] * 3
     calls = story.calls()
     assert [c["method"] for c in calls].count("checks") == 3
-    assert in_flight([c for c in calls if c["method"] == "checks"]) == 3, "the checks were asked for together"
+    # the unit pull-request reads still going hold some of the four slots, so how many checks overlap depends on
+    # the scheduling; that they are asked for together, not one after another, does not
+    assert 2 <= in_flight([c for c in calls if c["method"] == "checks"]) <= 3, "the checks were asked for together"
     no_repeats(calls)
     story.delay(0)
     result, seen, plain, seen_plain = evaluations(story, monkeypatch)
