@@ -71,12 +71,12 @@ def check(run, name: str, args: dict, ctx, elements: list | None = None) -> str 
         return f"still there: {', '.join(left)}" if left else None
     if name in ("pr.open-run", "pr.ready", "pr.merge"):
         repos = [run.home] if name == "pr.open-run" else [r for r in written(run) if ahead(r, run)]
+        if name == "pr.merge":
+            return "; ".join(r.name for r in repos) or None  # ahead of the base: not merged
+        # one repository's pull request is read independently of the next
+        pulls = run.gather([lambda r=r: run.tracker.pull(r.github, run.run_branch, r.base) for r in repos])
         missing = []
-        for repo in repos:
-            if name == "pr.merge":
-                missing.append(repo.name)  # ahead of the base: not merged
-                continue
-            pr = run.tracker.pull(repo.github, run.run_branch, repo.base)
+        for repo, pr in zip(repos, pulls, strict=True):
             if pr is None or pr["state"] == "closed":
                 missing.append(f"{repo.name}: no pull request")
             elif name == "pr.open-run" and args.get("draft") and not pr["draft"] and pr["state"] == "open":
