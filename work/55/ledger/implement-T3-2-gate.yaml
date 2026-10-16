@@ -1,0 +1,95 @@
+step: implement
+attempt: 2
+executor: agent
+actor: eugenefurs
+branch: fab0/55/implement-T3
+base:
+  branch: fab0/55/base
+  sha: 77201bdfe1bec70e3721e3743b627ff50f1dd7ab
+unit: T3
+model: opus
+gate:
+  type: auto
+  merge: auto
+  into: fab0/55/base
+  agent: reviewer
+  decision: reject
+summary: The rework applies all three of the person's decisions. The code is correct
+  for S12, S14, S15, S16, S17 and S18, and the full suite, ruff check and ruff format
+  all pass in the implement-T3 worktree. The diff touches only T3's four files.; One
+  problem the producer can fix blocks approval. Step 4 of the run skill now has the
+  return file written as a heredoc in concurrent Bash calls, but the skill no longer
+  says what that file is called. The old names `<returns>/<unit>.json` and `<unit>-gate.json`
+  were removed from step 3 and never added back, so the template just says `<file>`.
+  A round's record calls now run together in one message, so two hand-outs could share
+  a path, and one record could read the other's return. That makes the S19/S20 procedure
+  underspecified exactly where it became concurrent.
+verdict:
+  decision: reject
+  reasons:
+  - The rework applies all three of the person's decisions. The code is correct for
+    S12, S14, S15, S16, S17 and S18, and the full suite, ruff check and ruff format
+    all pass in the implement-T3 worktree. The diff touches only T3's four files.
+  - One problem the producer can fix blocks approval. Step 4 of the run skill now
+    has the return file written as a heredoc in concurrent Bash calls, but the skill
+    no longer says what that file is called. The old names `<returns>/<unit>.json`
+    and `<unit>-gate.json` were removed from step 3 and never added back, so the template
+    just says `<file>`. A round's record calls now run together in one message, so
+    two hand-outs could share a path, and one record could read the other's return.
+    That makes the S19/S20 procedure underspecified exactly where it became concurrent.
+  findings:
+  - check: Quality that matters
+    message: The skill no longer names the return file. Step 3 used to say `<returns>/<unit>.json`,
+      or `<unit>-gate.json` for a gate, and that was dropped. Step 4's template only
+      uses `cat > <file>` and `--return <file>`, so concurrent record-and-commit calls
+      in one message have no rule that keeps their files apart. Restore the per-unit
+      and per-gate names in step 4 and its template (for example `<returns>/<unit>.json`
+      and `<returns>/<unit>-gate.json`).
+    location: plugins/fab0/skills/run/SKILL.md:47
+  - check: Tests and checks
+    message: test_the_skill_runs_a_round_in_four_turns checks that step 3 no longer
+      writes `<returns>/<unit>.json`, but nothing checks that step 4 names a file
+      for each unit and gate. Extend it once the name is restored.
+    location: tests/test_round.py:288
+  - check: Scenarios
+    message: 'Not blocking: S13 is met only when there is no signal field. With a
+      signal field, a quiet `next --apply` makes two calls more than `status`. The
+      person''s review decision 2 deferred this, and it is marked as a strict xfail
+      (`KNOWN GAP`) pending the `make_tracker(boards=True)` follow-up.'
+    location: tests/test_round.py:122
+  - check: Scenarios
+    message: 'Not blocking: S17 holds except on record''s fallback path. For a unit
+      behind a tracker `when`, `record` still reads the tracker once, as one evaluation,
+      and the new test shows that. The person''s review decision 1 accepted this;
+      the real fix (the unit taken from its saved hand-out, in handout.py) is a follow-up.'
+    location: plugins/fab0/lib/fab0_engine/cli.py:314
+  - check: Scenarios
+    message: 'Not blocking: S22 is not shown. The spec says it is measured on the
+      release that ships this change.'
+  details:
+    unmet:
+    - S19
+    - S20
+    deferred_by_spec_or_person:
+    - S13 with a signal field (review decision 2, strict xfail)
+    - S17 fallback path (review decision 1)
+    - S22 (measured on the release)
+    met:
+    - S12
+    - S14
+    - S15
+    - S16
+    - S17
+    - S18
+    checks_run:
+    - 'uv run pytest -q in /Users/zhen/Work/Fab0/fab0-core/.git/fab0/worktrees/55/implement-T3:
+      312 passed, 1 xfailed'
+    - 'uv run ruff check: all checks passed'
+    - 'uv run ruff format --check: 45 files already formatted'
+    - 'git diff --name-only origin/fab0/55/base...HEAD: apply.py, cli.py, skills/run/SKILL.md,
+      tests/test_round.py only, all T3 files'
+    - 'Ran the step-4 heredoc chain form under zsh as well as bash: the JSON goes
+      to the heredoc, the chain runs after it, and a failure in the chain reaches
+      the `|| echo` fallback'
+started: '2026-10-16T19:08:25Z'
+ended: '2026-10-16T19:13:06Z'
