@@ -1,0 +1,68 @@
+step: implement
+attempt: 1
+executor: agent
+actor: eugenefurs
+branch: fab0/53/implement-T1
+unit: T1
+model: sonnet
+base:
+  branch: fab0/53/base
+  sha: 3d4e80790701617b6b9d45378ca23375b41a0a89
+inputs:
+  spec: sha256:138f8a7481c2aa94e3c4c44cc3114339b6acc3e39c2063b17fbcf0543405cdf3
+  tasks: sha256:c21abe24d4e6597169dac60d85541ead93ee246b829f131cd1ac0a40cb1756db
+  unit: sha256:8bc83396b672a29c62a4a467a3b29e3e51b686c2abc4ea08e12dc934d9d4c993
+  reviews: sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945
+claims:
+- core:plugins/fab0/lib/fab0_engine/handout.py
+- core:plugins/fab0/lib/fab0_engine/gates.py
+- core:plugins/fab0/lib/fab0_engine/ledger.py
+- core:plugins/fab0/schemas/ledger-entry.json
+- core:tests/test_timing.py
+gate:
+  type: auto
+summary: "T1 is done. All 240 tests pass and `ruff check` is clean. Hand-outs now\
+  \ carry a start line, and `record` returns times and an end line and keeps the times\
+  \ in the ledger. I did not run `scripts/e2e-triage.py`, which the repo notes ask\
+  \ for after a hand-out change; it costs tokens.\n\nChanges, all inside the task's\
+  \ files:\n- `ledger.py`: added the time helpers. `now()` gives UTC to the second,\
+  \ `seconds_between()` never goes negative, `took()` is the one duration formatter\
+  \ (`42s`, `4m 12s`, `1h 3m`), and `timing()` builds the result fields. Without a\
+  \ start, `timing()` returns only `ended`.\n- `ledger-entry.json`: optional `started`\
+  \ and `ended`, UTC strings in the form `2026-10-15T10:04:12Z`, checked by a pattern.\
+  \ Entries without them are still valid.\n- `handout.py`:\n  - `start_line()` and\
+  \ `end_line()` are shared with `gates.py`.\n  - Every agent, command and tool hand-out\
+  \ gets `line`, for example `implement-T2, attempt 2: implementer on opus, branch\
+  \ fab0/53/implement-T2`. A command's line gives the rendered command and a tool's\
+  \ gives its name. Action hand-outs get no line.\n  - `save_pending` stamps `started`,\
+  \ so a hand-out saved again starts again. A refused `record` leaves the pending\
+  \ file alone, so the start survives.\n  - `record` stamps `ended` just before it\
+  \ writes the entry.\n  - `record` writes `started` and `ended` to the entry, and\
+  \ adds `started`, `ended`, `duration`, `took` and `line` to its result.\n  - The\
+  \ end line reads `verified` or `not verified (<failed check names>)`. It adds `exit\
+  \ N` for a command and the question count when there are questions.\n  - I renamed\
+  \ a local `now` in `record` to `after` because it clashed with the new import.\n\
+  - `gates.py`: gate hand-outs get `line` (`gate of implement-T1, attempt 1: reviewer\
+  \ on opus, branch ...`, or `command ...` for a command gate). `save_gate_pending`\
+  \ stamps `started`. `record_gate` writes the times and returns `started`, `ended`,\
+  \ `duration`, `took` and `line` with `approved`, `rejected` or `escalated`. A command\
+  \ gate also gives `exit N`.\n- Without a start (a hand-out saved by an older engine),\
+  \ the result has `ended` but no `started`, `duration` or `took`. The entry gets\
+  \ neither time, and the end line ends with `time unknown`.\n- `tests/test_timing.py`\
+  \ (new, 24 tests) covers S1, S2, S4 to S10, plus the `took` formatting directly.\n\
+  \  - Start lines for agent, rework, gate, command-gate and tool hand-outs; none\
+  \ for actions.\n  - Times, the end line and the ledger entry for a verified unit.\n\
+  \  - A failed claims check, a command exit, and each gate decision.\n  - Schema\
+  \ validity, a refused record keeping the start, a repeated hand-out resetting it,\
+  \ and entries and hand-outs without times.\n  - The tests don't fake the clock.\
+  \ They back-date the pending file's `started` and check `duration` equals `ended`\
+  \ minus `started`.\n\nCommands run in the worktree: `uv run pytest` (240 passed),\
+  \ `uv run ruff check` (clean), `uv run ruff format` on the changed files, and `claude\
+  \ plugin validate --strict plugins/fab0` (passed).\n\nNot in this task: `status`\
+  \ and `next` unit durations (S12, T2), and the `/fab0:run` skill text for showing\
+  \ lines, activity and the `apply` list (S3, S11, S13, T3). S11, S12, S13 and S14\
+  \ are each delivered by T2, T3 or T4.\n\nBehaviour I chose where the spec leaves\
+  \ room:\n- A gate's start line is labelled `gate of <unit>`, and its end line uses\
+  \ the same label.\n- An end line without a start ends with `time unknown`.\n- With\
+  \ no start recorded, I write neither `started` nor `ended` to the ledger, so T2\
+  \ sees an entry without times."

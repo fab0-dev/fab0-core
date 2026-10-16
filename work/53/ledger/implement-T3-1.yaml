@@ -1,0 +1,56 @@
+step: implement
+attempt: 1
+executor: agent
+actor: eugenefurs
+branch: fab0/53/implement-T3
+unit: T3
+model: sonnet
+base:
+  branch: fab0/53/base
+  sha: 5bde1f92d66548a07fd653b8387331e2a7e52e0c
+inputs:
+  spec: sha256:138f8a7481c2aa94e3c4c44cc3114339b6acc3e39c2063b17fbcf0543405cdf3
+  tasks: sha256:c21abe24d4e6597169dac60d85541ead93ee246b829f131cd1ac0a40cb1756db
+  unit: sha256:8199efc9057b252597c68b60e241d78a4bf68b3e71b95bd87d2c39501cc955fd
+  reviews: sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945
+claims:
+- core:plugins/fab0/skills/run/SKILL.md
+gate:
+  type: auto
+summary: 'I changed only plugins/fab0/skills/run/SKILL.md, so /fab0:run now shows
+  the engine''s progress lines. Nothing in it can be unit-tested. I added no tests,
+  and I did not run the skill itself on a real run, so S13 is unconfirmed. The existing
+  suite passes: `uv run --offline pytest -q` gave 249 passed. I read the fields from
+  T1 and T2 in handout.py, gates.py and schedule.py on the branch (hand-out `line`,
+  record `line`, status `took`, and the shape of `applied` in apply.py), and the edits
+  use those names.
+
+
+  What the skill now says:
+
+  - **Rules:** show the engine''s `line`s verbatim and never work out times or durations
+  in the session.
+
+  - **Apply (S11):** show one line per entry of `applied`, in order, without interpreting
+  it, with pull request links. If `applied` is empty, say in one line that `apply`
+  did nothing.
+
+  - **Hand-outs (S1, S2):** after dropping the action hand-outs, and before any checkout
+  or agent starts, show each remaining hand-out''s `line` (the start line). Actions
+  get no line.
+
+  - **Execute (S3, S13):** the round''s Agent calls go in one message, in the foreground,
+  never with `run_in_background` and never one after another. Claude Code then shows
+  each agent''s activity while it works.
+
+  - **Record (S4, S5, S6):** show the result''s `line` (the end line) right after
+  each unit or gate is recorded, whether it is verified or not. If a result has no
+  `line`, say it was recorded.
+
+  - **End report (S12):** list each unit''s `took` from `status`, and leave it out
+  for a unit that has none. `apply` is now reported as what it did over the whole
+  run.
+
+
+  Spec check: S7 to S10 belong to T1 and T2, S14 to T4. Every spec scenario is delivered
+  by some task. I found no gaps and no questions.'

@@ -12,9 +12,9 @@ from pathlib import Path
 
 from .artifacts import tail, view
 from .errors import EXIT_REFUSED, EXIT_USAGE, Fail
-from .handout import worktree
+from .handout import end_line, start_line, worktree
 from .ledger import dump as dump_entry
-from .ledger import entry_name, parse
+from .ledger import entry_name, now, parse, timing
 from .schedule import Run, Unit
 from .schemas import core_schema, schema_errors
 from .templates import Unresolved, render
@@ -149,6 +149,14 @@ def gate_handout(run: Run, unit: Unit) -> dict:
             out["command"] = render(auto["command"], run.lookup(unit.ctx))
         except Unresolved as exc:
             raise Fail(EXIT_REFUSED, f"{unit.id}: {{{exc}}} has no value yet") from None
+    out["line"] = start_line(
+        f"gate of {unit.id}",
+        unit.attempt,
+        branch,
+        agent=out.get("agent"),
+        model=out.get("model"),
+        command=out.get("command"),
+    )
     return out
 
 
@@ -168,6 +176,7 @@ def save_gate_pending(run: Run, unit: Unit, out: dict) -> None:
         "base": base,
         "ledger_dir": run.ledger_dir,
         "into": run.ledger_branch or run.parent_in(repo, unit.ctx.parent),
+        "started": now(),  # a gate handed out again by a later `next` starts again
     }
     if unit.element_id:
         pending["element_id"] = unit.element_id
@@ -228,6 +237,9 @@ def record_gate(run: Run, unit_id: str, verdict: dict | None, exit_code: int | N
     target = Path(tree) / pending["ledger_dir"] / name
     if target.exists():
         raise Fail(EXIT_REFUSED, f"{target} exists; the ledger is append-only")
+    times = timing(pending.get("started"), now())
+    if "started" in times:
+        entry |= {"started": times["started"], "ended": times["ended"]}
     parse(dump_entry(entry), name)
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(dump_entry(entry))
@@ -240,4 +252,12 @@ def record_gate(run: Run, unit_id: str, verdict: dict | None, exit_code: int | N
         "decision": gate["decision"],
         "entry": str(target),
         "recorded": entry,
+        **times,
+        "line": end_line(
+            f"gate of {unit_id}",
+            pending["attempt"],
+            {"approve": "approved", "reject": "rejected", "escalate": "escalated"}[gate["decision"]],
+            times,
+            exit_code=exit_code if pending["executor"] == "command" else None,
+        ),
     }

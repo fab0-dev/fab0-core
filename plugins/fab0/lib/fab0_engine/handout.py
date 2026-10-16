@@ -16,7 +16,7 @@ from .claims import covers
 from .errors import EXIT_REFUSED, EXIT_USAGE, Fail
 from .git import scope_diff
 from .ledger import dump as dump_entry
-from .ledger import entry_name, parse
+from .ledger import entry_name, now, parse, timing
 from .schedule import Run, Unit
 from .schemas import core_schema, load_schema, resolve_schema_ref, schema_errors
 from .templates import Unresolved, render
@@ -167,6 +167,36 @@ def brief(run: Run, unit: Unit, schema: dict, trees: dict[str, str]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def start_line(
+    label: str,
+    attempt: int,
+    branch: str,
+    agent: str | None = None,
+    model: str | None = None,
+    command: str | None = None,
+    tool: str | None = None,
+) -> str:
+    """The line the session shows when it starts a hand-out: what runs, on which agent or command, and where."""
+    if agent:
+        who = f"{agent} on {model}" if model else agent
+    elif command is not None:
+        who = f"command `{command}`"
+    else:
+        who = f"tool {tool}"
+    return f"{label}, attempt {attempt}: {who}, branch {branch}"
+
+
+def end_line(label: str, attempt: int, outcome: str, times: dict, exit_code: int | None = None, extra: str = "") -> str:
+    """The line the session shows when a hand-out is recorded: its outcome and how long it took."""
+    parts = [outcome]
+    if exit_code is not None:
+        parts.append(f"exit {exit_code}")
+    if extra:
+        parts.append(extra)
+    parts.append(times.get("took") or "time unknown")
+    return f"{label}, attempt {attempt}: " + ", ".join(parts)
+
+
 def action_handout(run: Run, unit: Unit) -> dict:
     """An action whose check fails: `apply` performs it, and its check is its record (D37)."""
     out = {
@@ -233,6 +263,15 @@ def handout(run: Run, unit: Unit) -> dict:
                 out["return_schema"] = return_schema(run, step)
     except Unresolved as exc:
         raise Fail(EXIT_REFUSED, f"{unit.id}: {{{exc}}} has no value yet") from None
+    out["line"] = start_line(
+        unit.id,
+        unit.attempt,
+        out["branch"],
+        agent=out.get("agent"),
+        model=out.get("model"),
+        command=out.get("command"),
+        tool=out.get("tool"),
+    )
     return out
 
 
@@ -302,6 +341,7 @@ def save_pending(run: Run, unit: Unit, out: dict) -> None:
         "ledger_dir": run.ledger_dir,
         "outputs": unit.step.get("outputs", []),
         "rework": sorted(k for k in (unit.rework or {}) if k != "previous"),
+        "started": now(),  # a hand-out saved again by a later `next` starts again
     }
     pending.pop("brief", None)
     (folder / f"{unit.id}.json").write_text(json.dumps(pending, indent=2))
@@ -425,13 +465,25 @@ def record(run: Run, unit_id: str, returned: dict | None, exit_code: int | None)
     target = trees[pending["repo"]] / pending["ledger_dir"] / name
     if target.exists():
         raise Fail(EXIT_REFUSED, f"{target} exists; the ledger is append-only")
+    times = timing(pending.get("started"), now())
+    if "started" in times:
+        entry |= {"started": times["started"], "ended": times["ended"]}
     parse(dump_entry(entry), name)  # the entry itself must be valid
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(dump_entry(entry))
     path.unlink()
     failed = sorted(k for k, v in checks.items() if v != "pass")
-    before, now = pending.get("outside", {}), outside_state(run)
-    outside = sorted(n for n in now.keys() | before.keys() if now.get(n) != before.get(n))
+    questions = len(entry.get("questions", []))
+    line = end_line(
+        unit_id,
+        pending["attempt"],
+        "not verified (" + ", ".join(failed) + ")" if failed else "verified",
+        times,
+        exit_code=entry.get("exit"),
+        extra=f"{questions} question{'s' if questions != 1 else ''}" if questions else "",
+    )
+    before, after = pending.get("outside", {}), outside_state(run)
+    outside = sorted(n for n in after.keys() | before.keys() if after.get(n) != before.get(n))
     return {
         "ok": True,
         "unit": unit_id,
@@ -440,5 +492,7 @@ def record(run: Run, unit_id: str, returned: dict | None, exit_code: int | None)
         "verified": not failed,
         "failed": failed,
         "recorded": entry,
+        **times,
+        "line": line,
         **({"outside": [str(workspace_root(run) / n) for n in outside]} if outside else {}),
     }

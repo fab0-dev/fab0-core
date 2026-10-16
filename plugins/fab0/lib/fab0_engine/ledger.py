@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from datetime import UTC, datetime
 
 import yaml
 
@@ -41,3 +42,35 @@ def parse(raw: bytes | str, where: str) -> dict:
 
 def dump(entry: dict) -> str:
     return yaml.safe_dump(entry, sort_keys=False, allow_unicode=True)
+
+
+TIME_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
+
+
+def now() -> str:
+    """The clock, as the ledger keeps it: UTC, whole seconds, RFC 3339 (`2026-10-15T10:04:12Z`)."""
+    return datetime.now(UTC).strftime(TIME_FORMAT)
+
+
+def seconds_between(started: str, ended: str) -> int:
+    """Whole seconds from `started` to `ended`; never negative, so a clock that moved back gives 0."""
+    delta = datetime.strptime(ended, TIME_FORMAT) - datetime.strptime(started, TIME_FORMAT)
+    return max(0, int(delta.total_seconds()))
+
+
+def took(seconds: int) -> str:
+    """How long, for a person: `42s`, `4m 12s`, `1h 3m`. The one place durations are formatted."""
+    seconds = max(0, int(seconds))
+    if seconds < 60:
+        return f"{seconds}s"
+    if seconds < 3600:
+        return f"{seconds // 60}m {seconds % 60}s"
+    return f"{seconds // 3600}h {seconds % 3600 // 60}m"
+
+
+def timing(started: str | None, ended: str) -> dict:
+    """The times of a `record` result. Without a start (a hand-out saved before times existed) only `ended`."""
+    if not started:
+        return {"ended": ended}
+    seconds = seconds_between(started, ended)
+    return {"started": started, "ended": ended, "duration": seconds, "took": took(seconds)}
