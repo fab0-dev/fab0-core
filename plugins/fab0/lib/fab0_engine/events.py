@@ -4,6 +4,9 @@ The log is `<home git common dir>/fab0/events/<run>.jsonl`, beside the pending h
 line, append-only, shared by every checkout of the home repo and every process on the machine, and outside every
 branch, so writing it moves nothing in git. An event holds only what the engine's lines and states already show.
 
+An event's `unit` is a unit id, except for the run waiting for the merge of its own pull requests: that event
+names the run branch (as the inbox does), and a reader must not take it for a unit.
+
 Only `next`, `record` and `apply` write. A failed write never changes a command's result: it becomes a warning.
 """
 
@@ -173,11 +176,14 @@ class EventLog:
         due: list[tuple[str, str, dict, int | None]] = []
         for unit in self.run.units:
             reason = unit.reason or {}
+            # a step has an attempt, and so has a block with an auto gate (one per decision of its gate)
+            attempt = unit.attempt if unit.step or unit.auto is not None else None
             if unit.state == "waiting" and (reason.get("gate") == "human" or set(reason) & set(HUMAN)):
-                due.append(("waiting", unit.id, reason, unit.attempt if unit.step else None))
+                due.append(("waiting", unit.id, reason, attempt))
             elif unit.state == "blocked" and set(reason) & set(SIGNALS):
-                due.append(("blocked", unit.id, reason, unit.attempt if unit.step else None))
+                due.append(("blocked", unit.id, reason, attempt))
         if result.get("kind") == "waiting" and self.run.run_branch:
+            # the run's own pull request: its `unit` is the run branch, not a unit id
             due.append(("waiting", self.run.run_branch, result.get("reason") or {}, None))
         if not due:
             return

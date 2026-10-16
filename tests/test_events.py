@@ -6,15 +6,19 @@ import json
 import os
 import re
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
-from conftest import git
-from fab0_engine.events import append_event, read_events
+from conftest import git, start_docs
+from fab0_engine import apply as apply_module
+from fab0_engine.errors import Fail
+from fab0_engine.events import EventLog, append_event, read_events
 from fab0_engine.schemas import core_schema, schema_errors
 from test_apply import ONE_TASK, gh, implement, spec_done
 from test_dependencies import TASKS, blocked_by, issue
 from test_gates import record_gate, verdict
-from test_run import SPEC, do_spec, finish, handouts, start_work, started
+from test_lifecycle import run_of
+from test_run import BRIEF, DOCS_GH, SPEC, do_spec, finish, handouts, start_work, started
 
 TIME = re.compile(r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
 
@@ -238,6 +242,74 @@ def test_a_unit_blocked_by_a_signal_is_logged_and_one_that_waits_its_turn_is_not
     assert not any(e.get("unit") == "implement-T2" for e in events(story) if e["kind"] in ("blocked", "waiting"))
 
 
+def test_a_gated_block_that_waits_is_logged_with_its_attempt(factory):
+    f = factory("docs").init_git(DOCS_GH)
+    start_docs(f)
+    brief = handouts(f.run("next", "docs-1"))["brief"]
+    files = {("home", "briefs/docs-1.md"): BRIEF, ("home", "work/docs-1/pages.json"): "[]"}
+    finish(f, "docs-1", brief, start_work(f, brief), files, {"summary": "Nothing to write."})
+    f.merge("home", "docs/docs-1--brief", "docs/docs-1")
+    for unit in ("parallel-3--spelling", "parallel-3--links", "parallel-3--index"):
+        h = handouts(f.run("next", "docs-1", "--unit", unit))[unit]
+        files = {("home", "docs/index.md"): "# Docs\n"} if unit.endswith("index") else None
+        extra = [{"summary": "Index."}] if files else []
+        finish(f, "docs-1", h, start_work(f, h), files, *extra, **({} if files else {"exit": 0}))
+        f.merge("home", h["branch"], "docs/docs-1--parallel-3")
+    record_gate(f, "docs-1", "parallel-3", exit=1, output="docs/index.md:1 MD041 first line\n")
+    f.run("next", "docs-1")
+    f.run("next", "docs-1")
+    waits = [e for e in events(f, "docs-1") if e["kind"] == "waiting"]
+    assert [(e["unit"], e["attempt"], e["reason"]) for e in waits] == [("parallel-3", 1, "escalated reject")]
+
+
+def block(attempt: int, reason: dict, state: str = "waiting"):
+    """A gated block as the schedule gives it: no step, and the attempt of its latest gate decision."""
+    return SimpleNamespace(
+        id="parallel-3", step=None, gate={"auto": {}}, auto={}, state=state, reason=reason, attempt=attempt
+    )
+
+
+def test_a_block_that_escalates_on_two_successive_attempts_adds_two_events(tmp_path):
+    run = SimpleNamespace(units=[block(1, {"escalated": "reject"})], run_branch=None)
+    log = EventLog(run)
+    log._path = tmp_path / "docs-1.jsonl"
+    log.states({"kind": "units"})
+    log.states({"kind": "units"})
+    run.units = [block(2, {"escalated": "reject"})]
+    log.states({"kind": "units"})
+    log.states({"kind": "units"})
+    waits = read_events(log._path)
+    assert [(e["kind"], e["unit"], e["attempt"], e["reason"]) for e in waits] == [
+        ("waiting", "parallel-3", 1, "escalated reject"),
+        ("waiting", "parallel-3", 2, "escalated reject"),
+    ]
+    assert log.warnings == []
+
+
+def test_units_that_only_wait_their_turn_are_never_logged(tmp_path):
+    def unit(name: str, state: str, reason: dict):
+        return SimpleNamespace(
+            id=name, step={"step": name}, gate="none", auto=None, state=state, reason=reason, attempt=1
+        )
+
+    run = SimpleNamespace(
+        units=[
+            unit("a", "blocked", {"order": ["T1"]}),
+            unit("b", "blocked", {"data": "tasks is missing: home:work/412/tasks.yaml"}),
+            unit("c", "blocked", {"claim": "implement-T1"}),
+            unit("d", "blocked", {"limit": "parallel.max 2"}),
+            unit("e", "waiting", {"gate": "merge"}),
+            unit("f", "waiting", {"gate": "running"}),
+            unit("g", "blocked", {"tracker": "acme/billing#9"}),
+        ],
+        run_branch=None,
+    )
+    log = EventLog(run)
+    log._path = tmp_path / "412.jsonl"
+    log.states({"kind": "units"})
+    assert [(e["kind"], e["unit"]) for e in read_events(log._path)] == [("blocked", "g")]
+
+
 def test_read_only_commands_write_no_events(story, factory):
     story.run("status", "412")
     story.run("inbox", "--as", "po-user")
@@ -284,3 +356,43 @@ def test_a_log_that_cant_be_written_is_a_warning_and_nothing_else(unwritable):
     res = f.run("apply", "412")
     assert len(warned(res)) == 1 and res["applied"] == [{"unit": "spec", "pull": "opened acme/shop#2"}]
     assert git(f.repo("home"), "status", "--porcelain") == "", "the log moves nothing in git"
+
+
+def test_apply_that_stops_with_a_failure_still_logs_and_warns(unwritable, monkeypatch):
+    f = unwritable
+    run = run_of(f, "story", "412", monkeypatch)
+    real = apply_module.perform
+    calls = []
+
+    def perform(run_, unit):
+        calls.append(unit.id)
+        if len(calls) == 2:
+            raise Fail(1, "the second action fails")
+        return real(run_, unit)
+
+    monkeypatch.setattr(apply_module, "perform", perform)
+    with pytest.raises(Fail) as stopped:
+        apply_module.apply(run)
+    assert stopped.value.code == 1 and stopped.value.payload["error"] == "the second action fails"
+    assert len(warned(stopped.value.payload)) == 1 and "events" in warned(stopped.value.payload)[0]
+    assert git(f.repo("home"), "status", "--porcelain") == ""
+
+
+def test_apply_that_stops_with_a_failure_logs_what_it_did_first(story, monkeypatch):
+    run = run_of(story, "story", "412", monkeypatch)
+    real = apply_module.perform
+    calls = []
+
+    def perform(run_, unit):
+        calls.append(unit.id)
+        if len(calls) == 2:
+            raise Fail(1, "the second action fails")
+        return real(run_, unit)
+
+    monkeypatch.setattr(apply_module, "perform", perform)
+    with pytest.raises(Fail) as stopped:
+        apply_module.apply(run)
+    assert "warnings" not in stopped.value.payload
+    logged = events(story)
+    assert [(e["kind"], e["unit"]) for e in logged] == [("apply", "onStart-1")]
+    assert logged[0]["line"].startswith("apply: onStart-1: ")
