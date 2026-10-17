@@ -62,23 +62,18 @@ def candidates(wiring, tracker) -> list[str]:
     return list(found)
 
 
-def owner_of(run: Run, unit: Unit) -> str | None:
-    """The role whose turn a unit is: its human gate's owner, the step's, or its repository's."""
-    gate = unit.gate
-    human = gate.get("human") if isinstance(gate, dict) else None
-    if isinstance(human, dict) and human.get("owner"):
-        return human["owner"]
-    if unit.step and unit.step.get("owner") not in (None, "repo-owner"):
-        return unit.step["owner"]
-    return run.w.project["repos"].get(unit.pr_repo, {}).get("owner")
-
-
 def pull_of(run: Run, unit: Unit) -> str | None:
     if not unit.branch or run.tracker is None:
         return None
-    repo = run.repos[unit.pr_repo]
-    pr = run.tracker.pull(repo.github, unit.branch, run.parent_in(repo, unit.ctx.parent))
-    return f"{repo.github}#{pr['number']}" if pr and pr["state"] == "open" else None
+    if run.store_reviewed(unit):
+        found = run.review_pulls(unit)
+        github = run.store_github()
+    else:
+        repo = run.repos[unit.pr_repo]
+        found = run.tracker.pulls(repo.github, unit.branch, run.parent_in(repo, unit.ctx.parent))
+        github = repo.github
+    pr = found[-1] if found else None
+    return f"{github}#{pr['number']}" if pr and pr["state"] == "open" else None
 
 
 def latest_event(run: Run) -> dict | None:
@@ -131,7 +126,7 @@ def inbox(wiring, tracker, user: str, pick) -> dict:
         for unit in run.units:
             reason = unit.reason or {}
             if unit.state == "waiting" and reason.get("gate") not in ("merge", "gate", "running"):
-                owner = owner_of(run, unit)
+                owner = run.owner(unit)
                 entry = {"run": run_id, "unit": unit.id, "reason": reason, "owner": owner}
                 pull = pull_of(run, unit)
                 if pull:

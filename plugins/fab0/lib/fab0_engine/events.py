@@ -133,7 +133,7 @@ def apply_text(entry: dict) -> tuple[str, str | None]:
     if "action" in entry:
         said = f"{entry['action']}: {entry['did']}"
     else:
-        said = next(entry[k] for k in ("merge", "pull", "sync") if k in entry)
+        said = next(entry[k] for k in ("merge", "pull", "sync", "edit") if k in entry)
     return f"apply: {unit}: {said}", unit
 
 

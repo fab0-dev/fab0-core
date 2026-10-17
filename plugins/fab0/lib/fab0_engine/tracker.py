@@ -18,11 +18,12 @@ Set FAB0_GH_FAKE=<file.json> to read and write the facts in a JSON file instead 
      "issues": {"owner/repo#7": {"title", "body", "labels": [...], "type", "state", "state_reason",
                                  "assignees": [...], "comments": [...], "sub_issues": ["owner/repo#8"],
                                  "blocked_by": ["owner/repo#6"], "fields": {"Stage": "spec"}}},
-     "pulls": {"owner/repo": [{"number", "branch", "base", "state", "draft", "body", "diff",
-                               "reviews": [...], "comments": [...]}]},
+     "pulls": {"owner/repo": [{"number", "branch", "base", "state", "draft", "body", "diff", "head",
+                               "merged_by", "author", "reviews": [...], "comments": [...]}]},
      "boards": {"owner/7": {"fields": {"Stage": {"options": ["spec", "build"]}, "Note": {}}}}}
 
-A review is {"id", "state", "body", "user", "at"}; a comment is {"id", "body", "user", "at"}; `at` is optional
+A pull request's `merged_by` is who merged it, and `author` the login of its head commit's author. A review is
+{"id", "state", "body", "user", "at"}; a comment is {"id", "body", "user", "at"}; `at` is optional
 (a time, ISO 8601) and orders a pull request's reviews and conversation comments. An issue is on the board when
 it has `fields`. Without `boards` every field exists; with it, a field or option that isn't there is refused.
 
@@ -129,6 +130,8 @@ query($owner: String!, $repo: String!, $head: String!, $base: String!) {
       nodes {
         number state isDraft body headRefOid
         headRepository { nameWithOwner }
+        mergedBy { login __typename }
+        commits(last: 1) { nodes { commit { author { user { login } } } } }
         reviews(first: 100) { nodes { databaseId state body submittedAt author { login __typename } } }
         comments(first: 100) { nodes { databaseId body createdAt author { login __typename } } }
       }
@@ -308,6 +311,14 @@ class GhCli:
                     "state": d["state"].lower(),
                     "draft": bool(d.get("isDraft")),
                     "head": d.get("headRefOid"),
+                    "merged_by": _login(d.get("mergedBy")),
+                    "author": next(
+                        (
+                            ((c["commit"].get("author") or {}).get("user") or {}).get("login")
+                            for c in _nodes(d.get("commits"))
+                        ),
+                        None,
+                    ),
                     "body": d.get("body") or "",
                     "reviews": [
                         {
@@ -521,6 +532,8 @@ class GhFake:
                 "state": p.get("state", "open"),
                 "draft": p.get("draft", False),
                 "head": p.get("head"),
+                "merged_by": p.get("merged_by"),
+                "author": p.get("author"),
                 "body": p.get("body", ""),
                 "reviews": p.get("reviews", []),
                 "comments": p.get("comments", []),

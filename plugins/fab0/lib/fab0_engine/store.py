@@ -5,6 +5,8 @@ One runs repository per product holds, under `runs/<project>/<run>/`:
   is a no-op, and a read fails when the content doesn't match its name.
 - facts: append-only YAML records, `ledger/<name>.yaml`. Writing a fact whose name exists answers `exists`.
   That is the store's only concurrency control.
+- review copies: readable copies of a unit's store outputs, `review/<unit>/<file>`, on the unit's review branch
+  `fab0/<project>/<run>/<unit>`. They reach main only when a person merges the unit's review pull request.
 
 Only the engine calls it. The git backend keeps a clone of the runs repository and commits each write; `push`
 makes the writes visible to everyone. A push that loses a race fetches, puts its own files back on top of the
@@ -15,8 +17,10 @@ on a fact another machine wrote first: the remote's fact stands, and the writer 
 from __future__ import annotations
 
 import fcntl
+import os
 import re
 import subprocess
+import tempfile
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -30,6 +34,7 @@ NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")  # a run id or a fact name: o
 EXT = re.compile(r"^[a-z0-9]+$")
 DIGEST = re.compile(r"^sha256:([0-9a-f]{64})$")
 PUSH_TRIES = 3
+REVIEW_TRAILER = "Fab0-Review"  # marks the commits `review` makes, so a person's own commits are told apart
 
 
 class GitStore:
@@ -111,6 +116,99 @@ class GitStore:
         if not folder.is_dir():
             return []
         return sorted(d.name for d in folder.iterdir() if any((d / "ledger").glob("*.yaml")))
+
+    # ------------------------------------------------------------ review branches
+
+    def review_branch(self, run: str, unit: str) -> str:
+        """The branch of a unit's review pull request: one per unit, not one per attempt."""
+        self.run_dir(run)  # a run id is one path segment
+        return f"fab0/{self.project}/{run}/{unit}"
+
+    def review_dir(self, run: str, unit: str) -> str:
+        return f"{self.run_dir(run)}/review/{unit}"
+
+    def review_head(self, run: str, unit: str) -> str | None:
+        """The commit the unit's review branch is at, as the last pull or push saw it; None when it has none."""
+        if not (self.path / ".git").exists():
+            return None
+        branch = self.review_branch(run, unit)
+        ref = f"refs/remotes/origin/{branch}" if self._has_remote() else f"refs/heads/{branch}"
+        return self._out("rev-parse", f"{ref}^{{commit}}") if self._has(ref) else None
+
+    def review_files(self, run: str, unit: str, at: str | None = None) -> dict[str, bytes]:
+        """The files in the unit's review folder at commit `at`, else on the store's main branch."""
+        ref = at or self._main()
+        if not ref:
+            return {}
+        folder = self.review_dir(run, unit)
+        names = self._run("ls-tree", "-r", "-z", "--name-only", ref, "--", folder + "/").stdout.decode()
+        return {
+            n[len(folder) + 1 :]: self._run("cat-file", "blob", f"{ref}:{n}").stdout for n in names.split("\0") if n
+        }
+
+    def by_fab0(self, commit: str) -> bool:
+        """The commit is one `review` made, not a person's."""
+        return f"\n{REVIEW_TRAILER}: " in "\n" + self._out("log", "-1", "--format=%B", commit)
+
+    def author(self, commit: str) -> str:
+        return self._out("log", "-1", "--format=%an", commit)
+
+    def review(self, run: str, unit: str, files: dict[str, bytes], message: str) -> str | None:
+        """Put exactly `files` in the unit's review folder on its review branch, as a commit on top of whatever the
+        branch holds (a person's edits included), and push the branch. A new branch starts from main. Returns the
+        new commit, or None when the branch holds these files already. The store's main checkout never moves."""
+        branch, folder = self.review_branch(run, unit), self.review_dir(run, unit)
+        problem = ""
+        with self._locked():
+            for _ in range(PUSH_TRIES):
+                remote = self._has_remote()
+                if remote:
+                    self._out("fetch", "-q", "origin")
+                head = self.review_head(run, unit)
+                start = head or self._main()
+                tree = self._tree_with(start, folder, files)
+                if start and tree == self._out("rev-parse", f"{start}^{{tree}}"):
+                    return None
+                text = f"{message}\n\n{REVIEW_TRAILER}: {unit}"
+                commit = self._out("commit-tree", tree, *(["-p", start] if start else []), "-m", text)
+                if not remote:
+                    self._out("update-ref", f"refs/heads/{branch}", commit, *([head] if head else []))
+                    return commit
+                pushed = self._run("push", "-q", "origin", f"{commit}:refs/heads/{branch}")
+                if pushed.returncode == 0:
+                    self._out("update-ref", f"refs/remotes/origin/{branch}", commit)
+                    return commit
+                problem = pushed.stderr.decode().strip()  # a person pushed to the branch meanwhile: build on it
+        raise Fail(EXIT_ERROR, f"store: push of {branch} refused {PUSH_TRIES} times: {problem}")
+
+    def _main(self) -> str | None:
+        """The commit of main as everyone sees it: the remote's when there is one."""
+        if not (self.path / ".git").exists():
+            return None
+        for ref in ([f"refs/remotes/origin/{BRANCH}"] if self._has_remote() else []) + ["HEAD"]:
+            if self._has(ref):
+                return self._out("rev-parse", f"{ref}^{{commit}}")
+        return None
+
+    def _tree_with(self, start: str | None, folder: str, files: dict[str, bytes]) -> str:
+        """The tree of `start` with `folder` holding exactly `files`, built in an index of its own."""
+        git_dir = Path(self._out("rev-parse", "--absolute-git-dir"))
+        with tempfile.TemporaryDirectory(dir=git_dir, prefix="fab0-review-") as tmp:
+            env = {**os.environ, "GIT_INDEX_FILE": str(Path(tmp) / "index")}
+
+            def git(*args: str, data: bytes | None = None) -> str:
+                done = subprocess.run(["git", "-C", str(self.path), *args], input=data, capture_output=True, env=env)
+                if done.returncode:
+                    raise Fail(EXIT_ERROR, f"store: git {args[0]} failed: {done.stderr.decode().strip()}")
+                return done.stdout.decode().strip()
+
+            git("read-tree", *([start] if start else ["--empty"]))
+            for name in filter(None, git("ls-files", "-z", "--", folder + "/").split("\0")):
+                git("update-index", "--force-remove", "--", name)
+            for name, data in sorted(files.items()):
+                blob = git("hash-object", "-w", "--stdin", data=data)
+                git("update-index", "--add", "--cacheinfo", f"100644,{blob},{folder}/{name}")
+            return git("write-tree")
 
     def ahead(self) -> int:
         """Local writes not pushed yet, as far as the last fetch knows."""

@@ -5,7 +5,8 @@ Each kind has a hasher, so staleness stays generic:
 - `store`: its latest object in the run store, which is named by its hash (D79);
 - `issue`: the part of a tracker item (body, title, labels, comments);
 - `pr`: the part of a pull request (body, reviews that ask for changes or comment together with people's
-  conversation comments, diff); no pull request hashes as no reviews;
+  conversation comments, diff); no pull request hashes as no reviews. A unit's own is its review pull request
+  when it is reviewed in the runs repository (D80);
 - `tool`: the call itself, its name and rendered arguments. The engine can't call a tool; the agent reads the
   value, and a change of an outside value doesn't make work stale (D29);
 - `none`: nothing.
@@ -144,12 +145,14 @@ def pr_view(run, name: str, ctx, unit=None) -> View:
     if spec.get("of", "run") == "unit":
         if unit is None or not unit.branch:
             return View(sha_json([]) if part == "reviews" else None, "This unit has no pull request.")
-        repo = run.repos[unit.pr_repo]
-        head, base = unit.branch, run.parent_in(repo, ctx.parent)
+        if run.store_reviewed(unit):  # its review pull request, in the runs repository (D80)
+            github, head, base = run.store_github(), run.review_branch(unit), "main"
+        else:
+            repo = run.repos[unit.pr_repo]
+            github, head, base = repo.github, unit.branch, run.parent_in(repo, ctx.parent)
     else:
-        repo = run.home
-        head, base = run.run_branch, repo.base
-    pulls = run.tracker.pulls(repo.github, head, base) if run.tracker and head else []
+        github, head, base = run.home.github, run.run_branch, run.home.base
+    pulls = run.tracker.pulls(github, head, base) if run.tracker and github and head else []
     pr = pulls[-1] if pulls else None
     if part == "reviews":
         # every pull request of the branch: one merged at an older attempt keeps its reviews (from R6)
@@ -157,13 +160,13 @@ def pr_view(run, name: str, ctx, unit=None) -> View:
         for p in pulls:
             found += [
                 (r.get("at"), {"state": r["state"], "user": r["user"], "body": r["body"]})
-                for r in run.tracker.reviews(repo.github, p["number"])
+                for r in run.tracker.reviews(github, p["number"])
                 if r["state"] in REVIEW_STATES
             ]
             # people's conversation comments count as feedback; fab0's own posts don't
             found += [
                 (c.get("at"), {"state": "CONVERSATION_COMMENT", "user": c["user"], "body": c["body"]})
-                for c in run.tracker.comments(repo.github, p["number"])
+                for c in run.tracker.comments(github, p["number"])
                 if not c["body"].startswith("<!-- fab0:")
             ]
         # oldest first across all the pull requests; an entry without a time follows the one listed before it
@@ -176,12 +179,12 @@ def pr_view(run, name: str, ctx, unit=None) -> View:
         if not value:
             return View(sha_json([]), "No reviews ask for changes.")
         lines = "\n\n".join(f"**{r['user']}** ({r['state'].lower().replace('_', ' ')}):\n\n{r['body']}" for r in value)
-        numbers = ", ".join(f"{repo.github}#{p['number']}" for p in pulls)
+        numbers = ", ".join(f"{github}#{p['number']}" for p in pulls)
         return View(sha_json(value), f"Reviews on {numbers}, oldest first:\n\n{lines}")
     if pr is None:
         return View(None, "There is no pull request yet.")
-    value = pr["body"] if part == "body" else run.tracker.diff(repo.github, pr["number"])
-    return View(sha_json(value), f"The {part} of {repo.github}#{pr['number']}:\n\n````\n{value}\n````")
+    value = pr["body"] if part == "body" else run.tracker.diff(github, pr["number"])
+    return View(sha_json(value), f"The {part} of {github}#{pr['number']}:\n\n````\n{value}\n````")
 
 
 def tool_view(run, name: str, ctx) -> View:

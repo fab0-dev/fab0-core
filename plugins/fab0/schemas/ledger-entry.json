@@ -9,7 +9,10 @@
     "step": {"type": "string", "minLength": 1},
     "unit": {"type": "string", "minLength": 1},
     "attempt": {"type": "integer", "minimum": 1},
-    "executor": {"enum": ["agent", "action", "command", "tool"]},
+    "executor": {
+      "description": "What made the attempt. `person`: a person's edit of the outputs on the unit's review pull request, which `apply` records.",
+      "enum": ["agent", "action", "command", "tool", "person"]
+    },
     "actor": {"description": "The tracker user who ran it.", "type": "string", "minLength": 1},
     "model": {"type": "string", "minLength": 1},
     "branch": {"description": "The branch the attempt was made on.", "type": "string", "minLength": 1},
@@ -48,6 +51,16 @@
         "decision": {"enum": ["approve", "reject", "escalate"]},
         "merge": {"enum": ["auto", "human"]},
         "into": {"description": "The branch the gate merges into.", "type": "string"}
+      }
+    },
+    "edited": {
+      "description": "A person's attempt: the commit on the unit's review branch it was read from, and the review pull request.",
+      "type": "object",
+      "required": ["commit"],
+      "additionalProperties": false,
+      "properties": {
+        "commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "pr": {"type": "string", "pattern": "^[^/#]+/[^/#]+#[1-9][0-9]*$"}
       }
     },
     "summary": {"type": "string"},

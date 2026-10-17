@@ -457,6 +457,7 @@ class Pipeline:
         if name in self.steps:
             self.error(f"{at}: step '{name}' appears twice; its ledger entries would collide")
         self.steps[name] = step
+        self._check_review(at, step, node.get("gate", "none") if isinstance(node, dict) else "none")
         if not in_foreach:
             for what in self.w.uses_unit(step):
                 self.error(f"{at}: step '{name}' uses {what}, which needs foreach")
@@ -581,6 +582,21 @@ class Pipeline:
                 )
         if "step" in node or isinstance(node, str):
             self.gated.add(node if isinstance(node, str) else node["step"])
+
+    def _check_review(self, at: str, step: dict, gate) -> None:
+        """A step a person reviews through a pull request, with its outputs all in the run store and no repository
+        to write, is reviewed in the runs repository (D80), which must be on GitHub."""
+        human = gate == "human" or isinstance(gate, dict) and "human" in gate
+        via = gate["human"].get("via") if isinstance(gate, dict) and isinstance(gate.get("human"), dict) else None
+        outputs = step.get("outputs", [])
+        if not human or via == "label" or not outputs or step.get("repos", {}).get("write") or "action" in step:
+            return
+        if all(self.w.artifacts.get(n, {}).get("kind") == "store" for n in outputs):
+            if "github" not in self.w.project.get("store", {}):
+                self.error(
+                    f"{at}: step '{step['step']}' is reviewed in a pull request of the runs repository, since its "
+                    "outputs are all in the store: set store.github, or use gate human via label"
+                )
 
     def _check_condition(self, at: str, cond: dict) -> None:
         for key in ("all", "any"):

@@ -152,3 +152,30 @@ def test_the_store_block(tmp_path):
     assert default_project({"repos": {"home": {"github": "fab0-dev/docs"}}}) == "docs"
     assert remote_url("https://github.com/acme/shop.git", "acme/runs") == "https://github.com/acme/runs.git"
     assert remote_url(None, "acme/runs") == "https://github.com/acme/runs.git"
+
+
+def test_a_review_branch_takes_each_version_and_leaves_main_alone(tmp_path, origin):
+    store = clone(tmp_path, origin, "a")
+    store.append("412", "spec-1", {"step": "spec", "attempt": 1})
+    store.sync("push")
+    main = git(store.path, "rev-parse", "HEAD")
+    first = store.review("412", "spec", {"spec.md": b"# One\n", "tasks.yaml": b"[]\n"}, "spec attempt 1")
+    assert store.review("412", "spec", {"spec.md": b"# One\n", "tasks.yaml": b"[]\n"}, "again") is None
+    assert git(store.path, "rev-parse", "HEAD") == main and not (store.path / "runs/shop/412/review").exists()
+    branch = "fab0/shop/412/spec"
+    assert git(origin, "rev-parse", branch) == first == store.review_head("412", "spec")
+    assert store.by_fab0(first) and git(origin, "rev-parse", f"{first}^") == main, "a new branch starts from main"
+
+    other = clone(tmp_path, origin, "b")  # a person edits the spec on the branch, from their own clone
+    git(other.path, "checkout", "-q", branch)
+    (other.path / "runs/shop/412/review/spec/spec.md").write_text("# One, edited\n")
+    git(other.path, "commit", "-qam", "Edit the spec")
+    git(other.path, "push", "-q", "origin", branch)
+    edited = git(other.path, "rev-parse", "HEAD")
+    assert not other.by_fab0(edited) and other.author(edited) == "test"
+
+    second = store.review("412", "spec", {"spec.md": b"# Two\n"}, "spec attempt 2")
+    assert git(origin, "rev-parse", f"{second}^") == edited, "built on the person's commit, never forced"
+    assert store.review_files("412", "spec", second) == {"spec.md": b"# Two\n"}, "a dropped output goes"
+    assert store.review_files("412", "spec", edited)["spec.md"] == b"# One, edited\n"
+    assert store.review_files("412", "spec") == {}, "main has no review copy until the pull request merges"

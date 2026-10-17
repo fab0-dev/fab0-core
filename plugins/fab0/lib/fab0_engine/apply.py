@@ -6,6 +6,9 @@ One call loops until nothing more can be done:
   approval, within `git.auto_merge` and once its pull request's required checks pass;
 - every unit a person must look at gets a pull request: a draft until its gate approves, then ready. A pull
   request is never turned back into a draft (from #17), and questions and escalations are posted on it once;
+- a unit reviewed in the runs repository (D80) gets its latest outputs on its review branch and a review pull
+  request there; a person's edit on that branch is recorded as their attempt, and a merge by someone who isn't
+  the gate's owner is said on the pull request once;
 - what was recorded in the run store and not pushed yet is pushed (D74);
 - with `tracker.fields.signal` set, the run's item and its elements' items show their state on the board.
 
@@ -17,9 +20,11 @@ Each operation is idempotent: its check comes first, so running `apply` twice ch
 from __future__ import annotations
 
 from .actions import check, child_titles, element_items, written
+from .artifacts import store_name
 from .errors import EXIT_ERROR, Fail
 from .events import EventLog, state_line
 from .git import Writer
+from .handout import record_edit
 from .schedule import Run, Unit
 from .templates import render
 
@@ -229,7 +234,6 @@ def merge_unit(run: Run, unit: Unit) -> str | None:
 
 def unit_pull(run: Run, unit: Unit) -> list[str]:
     """A pull request for a unit a person looks at, and what it must say. Draft until its gate approves."""
-    reason = unit.reason or {}
     approved = unit.auto is None or (
         unit.latest and unit.gates.get(unit.attempt, {}).get("gate", {}).get("decision") == "approve"
     )
@@ -252,25 +256,68 @@ def unit_pull(run: Run, unit: Unit) -> list[str]:
         elif pr["draft"] and approved:
             run.tracker.ready_pr(repo.github, pr["number"])
             done.append(f"marked {repo.github}#{pr['number']} ready")
-        note = None
-        if "questions" in reason:
-            questions = "\n".join(f"- {q}" for q in unit.latest.get("questions", []))
-            note = (
-                f"<!-- fab0:questions {unit.id} {unit.attempt} -->\nThis needs answers before it goes on:\n\n"
-                f"{questions}\n\nAnswer by changing an input: the item, a review, or a file."
-            )
-        elif "escalated" in reason:
-            reasons = (
-                "\n".join(f"- {r}" for r in unit.gates.get(unit.attempt, {}).get("verdict", {}).get("reasons", []))
-                or f"- {reason['escalated']}"
-            )
-            note = f"<!-- fab0:escalated {unit.id} {unit.attempt} -->\nThe gate handed this to a person:\n\n{reasons}"
-        if note:
-            marker = note.splitlines()[0]
-            if not any(marker in c["body"] for c in run.tracker.comments(repo.github, pr["number"])):
-                run.tracker.comment(repo.github, pr["number"], note)
-                done.append(f"commented on {repo.github}#{pr['number']}")
+        done += notes(run, unit, repo.github, pr["number"])
     return done
+
+
+def notes(run: Run, unit: Unit, github: str, number: int) -> list[str]:
+    """What a pull request must say about where its unit waits, each once: questions, an escalation, or a merge
+    by someone who isn't the gate's owner."""
+    reason = unit.reason or {}
+    note = None
+    if "questions" in reason:
+        questions = "\n".join(f"- {q}" for q in unit.latest.get("questions", []))
+        note = (
+            f"<!-- fab0:questions {unit.id} {unit.attempt} -->\nThis needs answers before it goes on:\n\n"
+            f"{questions}\n\nAnswer by changing an input: the item, a review, or a file."
+        )
+    elif "escalated" in reason:
+        reasons = (
+            "\n".join(f"- {r}" for r in unit.gates.get(unit.attempt, {}).get("verdict", {}).get("reasons", []))
+            or f"- {reason['escalated']}"
+        )
+        note = f"<!-- fab0:escalated {unit.id} {unit.attempt} -->\nThe gate handed this to a person:\n\n{reasons}"
+    elif "merged" in reason:
+        role = run.owner(unit)
+        who = ", ".join(f"@{u}" for u in run.owners(unit) or []) or "nobody yet"
+        note = (
+            f"<!-- fab0:merged {unit.id} {unit.attempt} -->\nMerged {reason['merged']}, so the gate doesn't pass: "
+            f"only {role} ({who}) approves {unit.id}. One of them approves it with an approving review here."
+        )
+    if note is None:
+        return []
+    marker = note.splitlines()[0]
+    if any(marker in c["body"] for c in run.tracker.comments(github, number)):
+        return []
+    run.tracker.comment(github, number, note)
+    return [f"commented on {github}#{number}"]
+
+
+def review_pull(run: Run, unit: Unit) -> list[str]:
+    """A unit reviewed in the runs repository (D80): its latest outputs on its review branch, one commit per
+    attempt, and its review pull request, opened again while the latest outputs aren't merged."""
+    attempt = unit.latest["attempt"]
+    files = {
+        store_name(n, run.w.artifacts[n]): run.store.get(run.run, h) for n, h in unit.latest.get("outputs", {}).items()
+    }
+    branch, github = run.review_branch(unit), run.store_github()
+    done = []
+    if run.store.review(run.run, unit.id, files, f"{unit.id} attempt {attempt} (run {run.run})"):
+        done.append(f"put attempt {attempt} on {branch}")
+    pr = run.tracker.pull(github, branch, "main")
+    if pr is None or pr["state"] == "closed" or pr["state"] == "merged" and not run.holds_latest(unit):
+        role = run.owner(unit)
+        body = (
+            unit.latest.get("summary", "")
+            + f"\n\nUnit {unit.id} of run {run.run} ({run.name}), attempt {attempt}: its outputs are in "
+            f"`{run.store.review_dir(run.run, unit.id)}/`. Review them here; a review that asks for changes, or a "
+            "comment, brings a new attempt, and an edit you push to this branch counts as your own attempt. "
+            + (f"Merging approves them when someone in {role} merges." if role else "Merging approves them.")
+        )
+        number = run.tracker.create_pr(github, branch, "main", f"{unit.label}: run {run.run}", body, draft=False)
+        pr = {"number": number}
+        done.append(f"opened {github}#{number}")
+    return done + notes(run, unit, github, pr["number"])
 
 
 def publish_store(run: Run) -> str | None:
@@ -352,7 +399,11 @@ def rounds(run: Run, only: str | None, applied: list[dict]) -> tuple[Run, dict]:
                     synced = sync(run, unit, name)
                     if synced:
                         applied.append({"unit": unit.id, "sync": synced})
-            if unit.step and "action" in unit.step and unit.state == "ready":
+            edit = run.review_edit(unit) if unit.state not in ("running", "done") else None
+            if edit:
+                applied.append({"unit": unit.id, "edit": record_edit(run, unit, edit)})
+                progress = True
+            elif unit.step and "action" in unit.step and unit.state == "ready":
                 missing = check(run, unit.step["action"], unit.step.get("with", {}), unit.ctx, unit.elements)
                 if missing is not None:
                     applied.append({"unit": unit.id, "action": unit.step["action"], "did": perform(run, unit)})
@@ -367,7 +418,7 @@ def rounds(run: Run, only: str | None, applied: list[dict]) -> tuple[Run, dict]:
                 and unit.branch
                 and (reason.get("gate") in ("human", "gate", "running") or {"questions", "escalated"} & set(reason))
             ):
-                for did in unit_pull(run, unit):
+                for did in (review_pull if run.store_reviewed(unit) else unit_pull)(run, unit):
                     applied.append({"unit": unit.id, "pull": did})
         if not progress:
             pushed = publish_store(run)
