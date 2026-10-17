@@ -395,22 +395,22 @@ def cmd_log(args) -> int:
     if not RUN_ID.match(args.run):
         raise Fail(EXIT_USAGE, f"run id '{args.run}': letters, digits, . _ - only")
     tail = Tail(home_common_dir(root) / "fab0" / "events" / f"{args.run}.jsonl")
-    lines = tail.poll()
-    if not lines:
-        print(f"run {args.run} has no events here yet", flush=True)
-    for line in lines:
-        print(line, flush=True)
     if args.follow:
-        signal.signal(
-            signal.SIGINT, signal.default_int_handler
-        )  # an interrupt ends it, even if it was inherited ignored
-        try:
-            while True:
-                time.sleep(POLL)
-                for line in tail.poll():
-                    print(line, flush=True)
-        except (KeyboardInterrupt, BrokenPipeError):
-            pass
+        # an interrupt ends it, even if it was inherited ignored; set before the first line, which a person (or a
+        # test) may answer with Ctrl-C at once
+        signal.signal(signal.SIGINT, signal.default_int_handler)
+    try:
+        lines = tail.poll()
+        if not lines:
+            print(f"run {args.run} has no events here yet", flush=True)
+        for line in lines:
+            print(line, flush=True)
+        while args.follow:
+            time.sleep(POLL)
+            for line in tail.poll():
+                print(line, flush=True)
+    except (KeyboardInterrupt, BrokenPipeError):
+        pass
     return EXIT_OK
 
 
