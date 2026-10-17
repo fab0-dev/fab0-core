@@ -2,7 +2,7 @@
 
 Open runs are found where they leave traces:
 - run branches (`fab0/{run}/base`) in the home repo that aren't in its base yet;
-- run folders on the ledger branch of pipelines that keep one (D18);
+- runs with a ledger entry in the run store (D74);
 - open tracker items that match an issue trigger, started or not.
 
 Each is evaluated like `status`, and its units are sorted for the person asking:
@@ -24,8 +24,8 @@ import re
 
 from .events import events_path, read_events
 from .git import Repo
-from .ledger import DEFAULT_PATH
 from .schedule import Run, Unit
+from .store import open_store
 
 SIGNALS = ("tracker", "invalid-dependency", "failed", "cross-run", "condition", "unsupported")
 
@@ -38,7 +38,6 @@ def candidates(wiring, tracker) -> list[str]:
     """Run ids that may be open, oldest traces first, each once."""
     found: dict[str, None] = {}
     project = wiring.project
-    ledger = project.get("ledger", {})
     for name in project["pipelines"]:
         pipeline = wiring.pipelines[name]
         policy = wiring.git_policy(pipeline)
@@ -53,17 +52,13 @@ def candidates(wiring, tracker) -> list[str]:
                 m = pattern.match(ref.removeprefix("origin/"))
                 if m and not (base and home.is_ancestor(home.fresh(m.group(0)), base)):
                     found.setdefault(m["run"])
-        if ledger.get("branch") and home.fresh(ledger["branch"]):
-            prefix, _, _ = ledger.get("path", DEFAULT_PATH).partition("{run}")
-            listing = home.out("ls-tree", "-d", "--name-only", home.fresh(ledger["branch"]), "--", prefix)
-            for path in listing.splitlines():
-                run = path.removeprefix(prefix).split("/")[0]
-                if run:
-                    found.setdefault(run)
         issue = pipeline["trigger"].get("issue")
         if issue and tracker is not None:
             for number in tracker.open_items(home.github, issue.get("label"), issue.get("type")):
                 found.setdefault(str(number))
+    store = open_store(project, wiring.root)
+    for run in store.runs() if store else []:
+        found.setdefault(run)
     return list(found)
 
 
@@ -75,13 +70,13 @@ def owner_of(run: Run, unit: Unit) -> str | None:
         return human["owner"]
     if unit.step and unit.step.get("owner") not in (None, "repo-owner"):
         return unit.step["owner"]
-    return run.w.project["repos"].get(unit.ledger_repo, {}).get("owner")
+    return run.w.project["repos"].get(unit.pr_repo, {}).get("owner")
 
 
 def pull_of(run: Run, unit: Unit) -> str | None:
     if not unit.branch or run.tracker is None:
         return None
-    repo = run.repos[unit.ledger_repo]
+    repo = run.repos[unit.pr_repo]
     pr = run.tracker.pull(repo.github, unit.branch, run.parent_in(repo, unit.ctx.parent))
     return f"{repo.github}#{pr['number']}" if pr and pr["state"] == "open" else None
 

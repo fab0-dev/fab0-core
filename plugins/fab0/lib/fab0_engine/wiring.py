@@ -23,6 +23,10 @@ READ_ONLY_KINDS = ("issue", "pr", "tool")  # read by steps, never written by the
 LISTABLE = ("yaml", "json")
 DEFAULT_GIT = {"base": "main", "branching": "run", "auto_merge": {"into": ["run"]}}
 PLACEHOLDER = re.compile(r"\{([^{}]+)\}")
+LEDGER_HINT = (
+    "fab0 0.7 keeps the ledger in a run store, not in the product repositories: replace ledger with "
+    "store: {github: <owner>/<runs repository>}"
+)
 SCHEMA_1_HINT = (
     "this is schema 1, the fab0 0.5 wiring; this engine reads schema 2 (fab0 0.6). "
     "Rewrite .fab0/ for schema 2, or pin the plugin to fab0--v0.5.0"
@@ -89,6 +93,9 @@ class Wiring:
             return None
         if (self.root / ".fab0" / "stages").is_dir():
             self.error(".fab0/stages/", "stages/ is schema 1; schema 2 keeps steps in .fab0/steps/")
+        if "ledger" in data:
+            self.error(".fab0/fab0.yaml", LEDGER_HINT)
+            return None
         return self._validated("fab0.yaml", data, "project")
 
     def _load_dir(self, sub: str, kind: str) -> dict:
@@ -269,10 +276,6 @@ class Wiring:
                 found.append(f"artifact '{name}', which is per unit")
         return found
 
-    def writes_files(self, step: dict) -> bool:
-        outputs = [self.artifacts.get(o, {}) for o in step.get("outputs", [])]
-        return bool(step.get("repos", {}).get("write")) or any(a.get("kind") == "file" for a in outputs)
-
 
 def base_allowed(policy: dict) -> bool:
     """Merging into the base branch needs both `into: [base]` and `allow_base: true`."""
@@ -314,10 +317,6 @@ class Pipeline:
             self.error("onStart: run branching needs git.run-branch, which creates the run branch")
         self._walk(d["steps"], "steps", available=self._read_only(), in_foreach=False, in_parallel=None)
         self._check_actions("onEnd", d["onEnd"])
-        if not any(self.w.writes_files(s) for s in self.steps.values()) and "branch" not in self.w.project.get(
-            "ledger", {}
-        ):
-            self.error("no step writes files, so the run opens no pull request: set ledger.branch in fab0.yaml")
 
     def _read_only(self) -> set[str]:
         return {n for n, a in self.w.artifacts.items() if a["kind"] in READ_ONLY_KINDS}

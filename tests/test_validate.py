@@ -225,7 +225,8 @@ def test_reading_a_sibling_branch_needs_after(factory):
 
 
 TRIAGE = [
-    ("fab0.yaml", lambda d: d.pop("ledger"), "the run opens no pull request: set ledger.branch"),
+    ("fab0.yaml", lambda d: d.update(ledger={"path": "triage/{run}"}), "fab0 0.7 keeps the ledger in a run store"),
+    ("fab0.yaml", lambda d: d.pop("store"), "'store' is a required property"),
     ("fab0.yaml", lambda d: d.pop("tracker"), "an issue trigger needs a tracker"),
     (
         "pipelines/triage.yaml",

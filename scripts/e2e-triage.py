@@ -55,6 +55,14 @@ class Check:
         git(self.tmp, "init", "-q", "--bare", str(bare))
         git(self.home, "remote", "add", "origin", str(bare))
         git(self.home, "push", "-q", "origin", "main")
+        store = self.home.parent / "runs"  # the run store the fixture's fab0.yaml names, with its own origin
+        store.mkdir()
+        git(store, "init", "-q", "-b", "main")
+        git(store, "config", "user.email", "e2e@example.com")
+        git(store, "config", "user.name", "e2e")
+        self.runs = self.tmp / "remotes" / "runs.git"
+        git(self.tmp, "init", "-q", "--bare", "-b", "main", str(self.runs))
+        git(store, "remote", "add", "origin", str(self.runs))
         self.gh.write_text(json.dumps({"user": "support-user", "issues": {"acme/support#7": REPORT}}, indent=2))
         server = ROOT / "scripts" / "fake_mcp.py"
         args = {name: [str(server), name, str(self.log)] for name in ("chat", "tracker")}
@@ -130,8 +138,10 @@ class Check:
         posts = [c for c in self.calls() if c["tool"] == "post_message"]
         self.expect(len(posts) == 1 and posts[0]["arguments"]["channel"] == "on-call", "the page tool posted once")
         self.expect(units.get("page", {}).get("reason") == {"gate": "human"}, "page waits on a person's label")
-        ledger = git(self.home, "ls-tree", "-r", "--name-only", "origin/fab0/ledger", "--", "triage/7")
-        self.expect("triage/7/classify-1.yaml" in ledger, "the ledger branch is pushed with the entries")
+        ledger = git(self.runs, "ls-tree", "-r", "--name-only", "main", "--", "runs/support/7/ledger")
+        self.expect("runs/support/7/ledger/classify-1.yaml" in ledger, "the run store is pushed with the entries")
+        product = git(self.home, "log", "--all", "--name-only", "--format=")
+        self.expect("ledger" not in product, "no ledger file in the product repository")
 
         data = json.loads(self.gh.read_text())
         data["issues"]["acme/support#7"]["labels"].append("acknowledged")

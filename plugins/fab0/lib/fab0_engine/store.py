@@ -87,6 +87,13 @@ class GitStore:
             self._commit([rel], f"{run}: {name}")
         return "ok"
 
+    def fact_path(self, run: str, name: str) -> Path:
+        """Where the fact `name` of `run` is in the local checkout, whether or not it exists yet."""
+        return self.path / self.run_dir(run) / "ledger" / f"{name}.yaml"
+
+    def has(self, run: str, name: str) -> bool:
+        return self.fact_path(run, name).is_file()
+
     def facts(self, run: str) -> dict[str, dict]:
         """Every fact of `run`, by name."""
         folder = self.path / self.run_dir(run) / "ledger"
@@ -100,6 +107,13 @@ class GitStore:
         if not folder.is_dir():
             return []
         return sorted(d.name for d in folder.iterdir() if any((d / "ledger").glob("*.yaml")))
+
+    def ahead(self) -> int:
+        """Local writes not pushed yet, as far as the last fetch knows."""
+        if not (self.path / ".git").exists() or not self._has_remote() or not self._has("HEAD"):
+            return 0
+        remote = f"origin/{BRANCH}"
+        return int(self._out("rev-list", "--count", f"{remote}..HEAD" if self._has(remote) else "HEAD"))
 
     def sync(self, direction: str) -> list[tuple[str, str]]:
         """`pull` brings in what others pushed; `push` makes local writes visible to everyone. Both return the

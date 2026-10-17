@@ -50,21 +50,30 @@ def test_a_finished_run_leaves_the_inbox(factory):
     assert [r["run"] for r in f.run("inbox", "--as", "u")["runs"]] == [], "no trace left: not triggered, no ledger"
 
 
-def test_apply_pushes_the_ledger_branch(factory):
+def test_apply_pushes_the_run_store_and_the_inbox_finds_runs_there(factory):
     gh = {"user": "u", "issues": {"acme/support#7": {"title": "Fails", "body": "x", "labels": ["needs-triage"]}}}
     f = factory("triage").init_git(gh)
     remotes(f)
-    f.run("apply", "7")
-    h = handouts(f.run("next", "7"))["classify"]
-    assert h["branches"][0]["branch"] == "fab0/ledger"
-    f.checkout("home", "fab0/ledger", "main")
-    f.write("home", "triage/7/notes.txt", "x\n")  # anything committed in the run's folder
-    f.commit("home", "classify attempt 1")
-    f.checkout("home", "main")
+    f.run("apply", "7")  # its onStart takes the trigger's label off: only the store says the run is open
+    handouts(f.run("next", "7"))
+    f.put_fact("7", "classify-1", FACT)  # recorded here, not pushed: a record whose push failed
     res = f.run("apply", "7")
-    assert {"ledger": "pushed fab0/ledger"} in res["applied"]
+    assert {"store": "pushed 1 write"} in res["applied"]
     assert f.run("apply", "7")["applied"] == []
-    assert [r["run"] for r in f.run("inbox", "--as", "u")["runs"]] == ["7"], "found on the ledger branch"
+    assert [r["run"] for r in f.run("inbox", "--as", "u")["runs"]] == ["7"], "found in the run store"
+
+
+FACT = {
+    "step": "classify",
+    "attempt": 1,
+    "executor": "agent",
+    "actor": "u",
+    "branch": "fab0/7/classify",
+    "base": {"branch": "main", "sha": "0" * 40},
+    "gate": {"type": "auto"},
+    "summary": "Billing.",
+    "data": {"severity": "high", "area": "billing"},
+}
 
 
 def log_of(f, run: str):

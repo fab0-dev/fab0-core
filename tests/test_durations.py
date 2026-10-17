@@ -14,9 +14,13 @@ def unit_of(result: dict, name: str) -> dict:
     return next(u for u in result["units"] if u["unit"] == name)
 
 
-def retime(tree: Path, name: str, started: str | None, ended: str | None = None, run: str = "412") -> None:
-    """Set the times of a ledger entry in a checkout, as if the unit had taken that long. None drops them."""
-    path = tree / "work" / run / "ledger" / name
+def entry_path(f, name: str, run: str = "412") -> Path:
+    return f.store_path() / "runs" / f.project_key() / run / "ledger" / f"{name}.yaml"
+
+
+def retime(f, name: str, started: str | None, ended: str | None = None, run: str = "412") -> None:
+    """Set the times of a ledger entry in the run store, as if the unit had taken that long. None drops them."""
+    path = entry_path(f, name, run)
     entry = yaml.safe_load(path.read_text())
     entry.pop("started", None)
     entry.pop("ended", None)
@@ -30,11 +34,11 @@ def three_records(story) -> Path:
     do_spec(story, tasks=ONE_TASK)
     h = implement(story)
     tree = Path(h["branches"][-1]["worktree"])
-    retime(tree, "implement-T1-1.yaml", "2026-10-15T10:00:00Z", "2026-10-15T10:04:12Z")
+    retime(story, "implement-T1-1", "2026-10-15T10:00:00Z", "2026-10-15T10:04:12Z")
     record_gate(story, "412", "implement-T1", verdict("reject"))
-    retime(tree, "implement-T1-1-gate.yaml", "2026-10-15T10:05:00Z", "2026-10-15T10:06:05Z")
+    retime(story, "implement-T1-1-gate", "2026-10-15T10:05:00Z", "2026-10-15T10:06:05Z")
     implement(story, attempt=2, text="x = 2\n")
-    retime(tree, "implement-T1-2.yaml", "2026-10-15T10:10:00Z", "2026-10-15T10:13:00Z")
+    retime(story, "implement-T1-2", "2026-10-15T10:10:00Z", "2026-10-15T10:13:00Z")
     return tree
 
 
@@ -56,26 +60,26 @@ def test_a_unit_never_recorded_shows_no_duration(story):
 
 def test_an_attempt_alone_counts(story):
     do_spec(story, tasks=ONE_TASK)
-    tree = Path(implement(story)["branches"][-1]["worktree"])
-    retime(tree, "implement-T1-1.yaml", "2026-10-15T10:00:00Z", "2026-10-15T10:00:42Z")
+    implement(story)
+    retime(story, "implement-T1-1", "2026-10-15T10:00:00Z", "2026-10-15T10:00:42Z")
     unit = unit_of(story.run("status", "412"), "implement-T1")
     assert (unit["duration"], unit["took"]) == (42, "42s")
 
 
 def test_an_entry_without_times_leaves_the_duration_out(story):
-    tree = three_records(story)
-    retime(tree, "implement-T1-1.yaml", None)  # written before times existed
+    three_records(story)
+    retime(story, "implement-T1-1", None)  # written before times existed
     res = story.run("status", "412")
     unit = unit_of(res, "implement-T1")
     assert "duration" not in unit and "took" not in unit
     assert unit["state"], "nothing fails"
-    old = tree / "work" / "412" / "ledger" / "implement-T1-1.yaml"
+    old = entry_path(story, "implement-T1-1")
     assert "started" not in parse(old.read_bytes(), "old entry"), "an old entry is still valid"
 
 
 def test_a_gate_decision_without_times_leaves_the_duration_out(story):
-    tree = three_records(story)
-    retime(tree, "implement-T1-1-gate.yaml", None)
+    three_records(story)
+    retime(story, "implement-T1-1-gate", None)
     unit = unit_of(story.run("status", "412"), "implement-T1")
     assert "duration" not in unit and "took" not in unit
 
@@ -106,9 +110,7 @@ def gated_block_with_a_decision(factory):
     tree = Path(h["worktree"])
     git(f.repo("home"), "worktree", "add", "-q", str(tree), h["branch"])
     record_gate(f, "docs-1", "parallel-3", exit=0)
-    retime(tree, "parallel-3-1-gate.yaml", "2026-10-15T10:00:00Z", "2026-10-15T10:01:05Z", run="docs-1")
-    git(tree, "add", "-A")
-    git(tree, "commit", "-q", "--amend", "--no-edit")
+    retime(f, "parallel-3-1-gate", "2026-10-15T10:00:00Z", "2026-10-15T10:01:05Z", run="docs-1")
     f.block_tree = tree
     return f
 

@@ -14,14 +14,11 @@ def verdict(decision: str, **extra) -> dict:
 
 
 def record_gate(f, run: str, unit: str, verdict_: dict | None = None, exit=None, output=None, expect=0) -> dict:
-    """What a session does with a gate hand-out: record the verdict (or exit code), then commit the entry."""
+    """What a session does with a gate hand-out: record the verdict (or exit code), which goes to the run store."""
     h = handouts(f.run("next", run, "--unit", unit))[unit]
     assert h.get("gate"), h
-    tree = Path(h["worktree"])
-    if not tree.exists():  # a gated block's branch may have no checkout yet
-        git(f.repo(h["repo"]), "worktree", "add", "-q", str(tree), h["branch"])
     args = ["record", run, unit, "--gate"]
-    tmp = tree.parent
+    tmp = f.home.parent
     if verdict_ is not None:
         (tmp / "verdict.json").write_text(json.dumps(verdict_))
         args += ["--return", str(tmp / "verdict.json")]
@@ -30,11 +27,7 @@ def record_gate(f, run: str, unit: str, verdict_: dict | None = None, exit=None,
     if output is not None:
         (tmp / "output.txt").write_text(output)
         args += ["--output", str(tmp / "output.txt")]
-    res = f.run(*args, expect=expect)
-    if expect == 0:
-        git(tree, "add", "-A")
-        git(tree, "commit", "-q", "-m", f"{unit} gate {h['attempt']}")
-    return res
+    return f.run(*args, expect=expect)
 
 
 def implement(f, attempt: int = 1, text: str = "x = 1\n") -> dict:
@@ -76,6 +69,22 @@ def test_approve_then_the_merge_finishes_the_unit(story):
     assert states(story.run("status", "412"))["implement-T1"] == ("waiting", {"gate": "merge"})
     story.merge("backend", "fab0/412/implement-T1", "fab0/412/base")
     assert states(story.run("status", "412"))["implement-T1"] == ("done", None)
+
+
+def test_the_ledger_stays_out_of_the_product_repositories(story):
+    """MIGRATION M2: every attempt and gate decision is in the run store, and the product branches carry only the
+    work, whatever merged them."""
+    do_spec(story, tasks=ONE_TASK)
+    implement(story)
+    record_gate(story, "412", "implement-T1", verdict("approve"))
+    story.run("apply", "412")  # merges the approved unit into the run branch
+    assert states(story.run("status", "412"))["implement-T1"] == ("done", None)
+    assert {"spec-1", "implement-T1-1", "implement-T1-1-gate"} <= set(story.facts("412"))
+    for repo in ("home", "backend"):
+        files = git(story.repo(repo), "log", "--all", "--name-only", "--format=").split()
+        assert not [f for f in files if "ledger" in f], f"{repo} has no ledger file on any branch"
+    subjects = git(story.repo("backend"), "log", "--format=%s", "fab0/412/base").splitlines()
+    assert not [s for s in subjects if " gate " in s], "a gate decision is no commit"
 
 
 def test_reject_reruns_with_the_findings_then_escalates(story):
@@ -198,7 +207,7 @@ def classify(f, data: dict) -> None:
     finish(f, "7", h, trees, returned={"summary": "Classified.", "data": data})
 
 
-def test_a_command_gate_on_the_ledger_branch_decides_alone(factory):
+def test_a_command_gate_decides_alone_when_nothing_is_to_merge(factory):
     f = factory("triage").init_git(TRIAGE_GH)
     classify(f, {"severity": "high", "area": "billing"})
     record_gate(f, "7", "classify", exit=0)
@@ -215,7 +224,7 @@ def test_a_command_gate_on_the_ledger_branch_decides_alone(factory):
     assert states(res)["label"] == ("done", None)
     page = handouts(res)["page"]
     assert page["executor"] == "tool" and page["with"]["text"] == "High-severity report 7: Checkout fails"
-    finish(f, "7", page, {"home": Path(page["branches"][0]["worktree"])}, returned={"summary": "Posted."})
+    finish(f, "7", page, start_work(f, page), returned={"summary": "Posted."})
     assert states(f.run("status", "7"))["page"] == ("waiting", {"gate": "human"})
     f.gh_edit(lambda d: d["issues"]["acme/support#7"]["labels"].append("acknowledged"))
     assert states(f.run("status", "7"))["page"] == ("done", None), "the label is the person's decision"

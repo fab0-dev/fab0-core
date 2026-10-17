@@ -106,14 +106,14 @@ def test_commands_and_tools_have_start_lines_and_actions_none(factory):
     classify(f, {"severity": "high", "area": "billing"})
     gate = handouts(f.run("next", "7"))["classify"]
     assert gate["executor"] == "command"
-    assert gate["line"] == f"gate of classify, attempt 1: command `{gate['command']}`, branch fab0/ledger"
+    assert gate["line"] == f"gate of classify, attempt 1: command `{gate['command']}`, branch fab0/7/classify"
     record_gate(f, "7", "classify", exit=0)
     res = f.run("next", "7")
     assert "line" not in handouts(res)["label"], "an action hand-out has no start line"
     f.gh_edit(lambda d: d["issues"]["acme/support#7"]["labels"].extend(["severity-high", "area-billing"]))
     page = handouts(f.run("next", "7"))["page"]
     assert page["executor"] == "tool"
-    assert page["line"] == f"page, attempt 1: tool {page['tool']}, branch fab0/ledger"
+    assert page["line"] == f"page, attempt 1: tool {page['tool']}, branch fab0/7/page"
 
 
 # ---------------------------------------------------------------- end lines and times
@@ -199,9 +199,8 @@ def test_the_ledger_entry_holds_the_times_and_is_valid(story):
     do_spec(story, tasks=ONE_TASK)
     implement(story)
     record_gate(story, "412", "implement-T1", verdict("approve"))
-    for name in ("implement-T1-1.yaml", "implement-T1-1-gate.yaml"):
-        raw = git(story.repo("backend"), "show", f"fab0/412/implement-T1:work/412/ledger/{name}")
-        entry = parse(raw, name)
+    for name in ("implement-T1-1", "implement-T1-1-gate"):
+        entry = parse(json.dumps(story.fact("412", name)), name)
         assert TIME.match(entry["started"]) and TIME.match(entry["ended"])
         assert seconds_between(entry["started"], entry["ended"]) >= 0
 
@@ -226,7 +225,7 @@ def test_a_refused_record_keeps_the_start(factory):
     edit_pending(path, started="2026-10-15T10:00:00Z")
     bad = finish(f, "7", h, trees, returned={"summary": "x", "data": {"severity": "dire"}}, expect=4)
     assert "doesn't match its schema" in bad["error"]
-    assert not list(Path(trees["home"]).glob("work/7/ledger/classify-1.yaml")), "a refused record wrote no entry"
+    assert "classify-1" not in f.facts("7"), "a refused record wrote no entry"
     assert json.loads(path.read_text())["started"] == "2026-10-15T10:00:00Z"
     res = finish(f, "7", h, trees, returned={"summary": "B.", "data": {"severity": "high", "area": "billing"}})
     assert res["recorded"]["started"] == "2026-10-15T10:00:00Z" and TIME.match(res["recorded"]["ended"])

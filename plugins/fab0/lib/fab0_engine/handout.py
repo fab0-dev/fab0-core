@@ -1,7 +1,8 @@
 """Hand-outs (`next`) and results (`record`): what a session needs to execute a unit, and the ledger entry after.
 
 A hand-out is saved under the home repo's git directory (`fab0/pending/<run>/<unit>.json`) until `record`
-consumes it, so a unit is recorded only as it was handed out.
+consumes it, so a unit is recorded only as it was handed out. `record` commits the unit's work on its branch,
+then writes its ledger entry into the run store, with the commits it made (D74).
 """
 
 from __future__ import annotations
@@ -15,8 +16,8 @@ from .artifacts import content_hash, input_hashes, read_disk, verify, view
 from .claims import covers
 from .errors import EXIT_REFUSED, EXIT_USAGE, Fail
 from .git import scope_diff
-from .ledger import dump as dump_entry
-from .ledger import entry_name, now, parse, timing
+from .ledger import check as check_entry
+from .ledger import entry_name, now, timing
 from .schedule import Run, Unit
 from .schemas import core_schema, load_schema, resolve_schema_ref, schema_errors
 from .templates import Unresolved, render
@@ -52,12 +53,8 @@ def branches(run: Run, unit: Unit) -> list[dict]:
     branch marked `sync` gets its `from` merged in before work starts: a rework after its parent moved. Never
     a rebase, since nothing is force-pushed.
     """
-    if run.ledger_branch:
-        repo, b = run.repos["home"], run.ledger_branch
-        tree = worktree(run, "home", b, unit.id)
-        return [{"repo": "home", "branch": b, "from": repo.base, "exists": bool(repo.fresh(b)), "worktree": tree}]
     out = []
-    for name in unit.write or [unit.ledger_repo]:
+    for name in unit.write or [unit.pr_repo]:
         repo = run.repos[name]
         chain, branch = [], unit.branch
         parent = unit.ctx.parent
@@ -233,8 +230,8 @@ def handout(run: Run, unit: Unit) -> dict:
         "step": step["step"],
         "attempt": unit.attempt,
         "executor": executor,
-        "repo": unit.ledger_repo,
-        "branch": run.ledger_branch or unit.branch,
+        "repo": unit.pr_repo,
+        "branch": unit.branch,
         "branches": branches(run, unit),
         "write": unit.write,
         "claims": unit.claims,
@@ -279,9 +276,9 @@ def claim(run: Run, unit: Unit) -> bool:
     """Claim a unit that starts now by creating its branch, on the remote first (D46). False: someone else has."""
     from .git import Writer
 
-    if run.ledger_branch or unit.state != "ready":
+    if unit.state != "ready":
         return True
-    for name in dict.fromkeys(unit.write or [unit.ledger_repo]):
+    for name in dict.fromkeys(unit.write or [unit.pr_repo]):
         repo = run.repos[name]
         parent = repo.fresh(run.parent_in(repo, unit.ctx.parent))
         if repo.fresh(unit.branch):
@@ -306,7 +303,7 @@ def workspace_root(run: Run) -> Path:
 def outside_state(run: Run) -> dict[str, int]:
     """What sits beside the repositories in the workspace, and when each last changed. An agent that writes
     outside every repository usually writes there (from #20); writes anywhere else can't be seen."""
-    repos = {r.path for r in run.repos.values()}
+    repos = {r.path for r in run.repos.values()} | ({run.store.path.resolve()} if run.store else set())
     root = workspace_root(run)
     state = {}
     for entry in root.iterdir() if root.is_dir() else []:
@@ -338,7 +335,6 @@ def save_pending(run: Run, unit: Unit, out: dict) -> None:
         "inputs": input_hashes(run, unit),
         "scope": {n: run.repos[n].scope_state() for n in others},
         "outside": outside_state(run),
-        "ledger_dir": run.ledger_dir,
         "outputs": unit.step.get("outputs", []),
         "rework": sorted(k for k in (unit.rework or {}) if k != "previous"),
         "started": now(),  # a hand-out saved again by a later `next` starts again
@@ -374,7 +370,7 @@ def check_writes(run: Run, unit: Unit, pending: dict, trees: dict) -> dict[str, 
             since = found.stdout.strip() or since
         files = repo.changed_since(tree, since)
         globs = pending["claims"].get(name, [])
-        outside = [f for f in files if not f.startswith(run.ledger_dir + "/") and not any(covers(g, f) for g in globs)]
+        outside = [f for f in files if not any(covers(g, f) for g in globs)]
         if outside:
             findings[f"claims:{name}"] = [f"{f} is outside the claimed paths ({', '.join(globs)})" for f in outside]
     return findings
@@ -397,8 +393,8 @@ def record(run: Run, unit_id: str, returned: dict | None, exit_code: int | None)
         "attempt": pending["attempt"],
         "executor": executor,
         "actor": pending["actor"],
-        "branch": pending["branch"],
     }
+    entry["branch"] = pending["branch"]
     if "element_id" in pending:
         entry["unit"] = pending["element_id"]
     if "model" in pending:
@@ -430,17 +426,18 @@ def record(run: Run, unit_id: str, returned: dict | None, exit_code: int | None)
         errors = schema_errors(returned, schema)
         if errors:
             raise Fail(EXIT_REFUSED, f"{unit_id}: the return doesn't match its schema", errors=errors)
-        entry["summary"] = returned["summary"]
-        if returned.get("questions"):
-            entry["questions"] = returned["questions"]
-        if "data" in returned:
-            entry["data"] = returned["data"]
     trees = {}
     for name in {b["repo"] for b in pending["branches"]}:
         tree = run.repos[name].worktrees().get(pending["branch"])
         if tree is None:
             raise Fail(EXIT_REFUSED, f"check out {pending['branch']} in {run.repos[name].path} before recording")
         trees[name] = Path(tree)
+    if returned is not None:
+        entry["summary"] = local_paths_out(returned["summary"], trees)
+        if returned.get("questions"):
+            entry["questions"] = [local_paths_out(q, trees) for q in returned["questions"]]
+        if "data" in returned:
+            entry["data"] = returned["data"]
     outputs, checks = {}, {}
     for name in pending["outputs"]:
         if run.w.artifacts[name]["kind"] != "file":
@@ -462,16 +459,20 @@ def record(run: Run, unit_id: str, returned: dict | None, exit_code: int | None)
     if checks:
         entry["verify"] = checks
     name = entry_name(unit_id, pending["attempt"])
-    target = trees[pending["repo"]] / pending["ledger_dir"] / name
-    if target.exists():
-        raise Fail(EXIT_REFUSED, f"{target} exists; the ledger is append-only")
+    if run.store.has(run.run, name):
+        raise Fail(EXIT_REFUSED, f"{run.run}/{name} is in the ledger already; the ledger is append-only")
     times = timing(pending.get("started"), now())
     if "started" in times:
         entry |= {"started": times["started"], "ended": times["ended"]}
-    parse(dump_entry(entry), name)  # the entry itself must be valid
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(dump_entry(entry))
+    check_entry({**entry, "heads": {}}, name)  # the entry itself must be valid before anything is committed
+    first = (entry.get("summary") or "").strip().splitlines()
+    message = f"{unit_id} attempt {pending['attempt']} (fab0 {read_version()}): {first[0] if first else 'no summary'}"
+    heads = commit_work(trees, pending["starts"], message)
+    if heads:
+        entry["heads"] = heads
+    run.store.append(run.run, name, entry)
     path.unlink()
+    pushed = push(run)
     failed = sorted(k for k, v in checks.items() if v != "pass")
     questions = len(entry.get("questions", []))
     line = end_line(
@@ -488,11 +489,55 @@ def record(run: Run, unit_id: str, returned: dict | None, exit_code: int | None)
         "ok": True,
         "unit": unit_id,
         "attempt": pending["attempt"],
-        "entry": str(target),
+        "entry": str(run.store.fact_path(run.run, name)),
         "verified": not failed,
         "failed": failed,
         "recorded": entry,
         **times,
         "line": line,
         **({"outside": [str(workspace_root(run) / n) for n in outside]} if outside else {}),
+        **pushed,
     }
+
+
+def local_paths_out(text: str, trees: dict[str, Path]) -> str:
+    """An agent's text without the unit's worktree paths, which mean nothing on another machine: the ledger is
+    shared by everyone who runs the project."""
+    for tree in trees.values():
+        text = text.replace(f"{tree}/", "")
+    return text
+
+
+def commit_work(trees: dict[str, Path], starts: dict, message: str) -> dict[str, str]:
+    """Commit what the unit changed in each worktree, concluding a merge the session started. Returns, per
+    repository, the commit its branch is at, when the branch's content differs from its parent's at the hand-out:
+    an empty commit, such as a claim, isn't work to merge."""
+    heads = {}
+    for name, tree in sorted(trees.items()):
+
+        def git(*args: str, tree: Path = tree) -> subprocess.CompletedProcess:
+            return subprocess.run(["git", "-C", str(tree), *args], capture_output=True, text=True)
+
+        git("add", "-A")
+        merging = git("rev-parse", "-q", "--verify", "MERGE_HEAD").returncode == 0
+        if merging or git("diff", "--cached", "--quiet").returncode:
+            done = git("commit", "-q", "--no-verify", "-m", message)
+            if done.returncode:
+                raise Fail(EXIT_REFUSED, f"the commit in {tree} failed: {done.stderr.strip()}")
+        head = git("rev-parse", "HEAD").stdout.strip()
+        start = starts.get(name, {}).get("sha")
+        if head and (not start or git("diff", "--quiet", start, head).returncode):
+            heads[name] = head
+    return heads
+
+
+def push(run: Run) -> dict:
+    """Make the ledger visible to everyone. A push that fails is said, not fatal: the next `apply` pushes again."""
+    try:
+        lost = run.store.sync("push")
+    except Fail as exc:
+        return {"unpushed": exc.payload["error"]}
+    if lost:
+        names = ", ".join(f"{r}/{n}" for r, n in lost)
+        return {"warnings": [f"another machine recorded {names} first; its entry stands"]}
+    return {}

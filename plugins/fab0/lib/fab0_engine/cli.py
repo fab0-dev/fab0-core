@@ -4,8 +4,8 @@
   status RUN            every unit of a run and its state; read-only
   next RUN              the same, and a hand-out for every unit that is ready or running; with --apply, after
                         performing what is due, from the same pass over the tracker
-  record RUN UNIT       check a unit's result, or with --gate its gate's, and write the ledger entry; reads
-                        no tracker (at most the run's item, to pick the pipeline)
+  record RUN UNIT       check a unit's result, or with --gate its gate's, commit its work and write its ledger
+                        entry into the run store; reads no tracker (at most the run's item, to pick the pipeline)
   log RUN [--follow]    print the run's events, oldest first, as text; with --follow, keep printing new ones
   --version             the fab0 release of this engine
 
@@ -36,6 +36,7 @@ from .gates import gate_handout, record_gate, save_gate_pending
 from .handout import action_handout, claim, handout, record, save_pending
 from .inbox import inbox
 from .schedule import Run, Unit
+from .store import open_store
 from .tracker import make_tracker
 from .version import check_engine, read_version
 from .wiring import READ_ONLY_KINDS, Wiring
@@ -241,8 +242,24 @@ class OfflineRun(Run):
         return why
 
 
+def pull_store(wiring) -> None:
+    """One pull of the run store before a run is read, so what others recorded counts (D74). Offline, the local
+    copy is read, with a warning."""
+    store = open_store(wiring.project, wiring.root)
+    if store is None:
+        return
+    try:
+        lost = store.sync("pull")
+    except Fail as exc:
+        WARNINGS.append(f"the run store wasn't pulled, so this reads the local copy: {exc.payload['error']}")
+        return
+    WARNINGS.extend(f"another machine recorded {r}/{n} first; its entry stands" for r, n in lost)
+
+
 def load_run(args) -> Run:
     wiring = load_wiring(args)
+    if args.command != "record":  # record pushes, which pulls first
+        pull_store(wiring)
     if not RUN_ID.match(args.run):
         raise Fail(EXIT_USAGE, f"run id '{args.run}': letters, digits, . _ - only")
     tracker = make_tracker()  # issue and pull request facts, from gh or FAB0_GH_FAKE
@@ -352,6 +369,7 @@ def cmd_apply(args) -> dict:
 
 def cmd_inbox(args) -> dict:
     wiring = load_wiring(args)
+    pull_store(wiring)
     tracker = make_tracker()
     return inbox(wiring, tracker, actor(args, tracker), lambda run: pick_pipeline(wiring, run, None, tracker))
 

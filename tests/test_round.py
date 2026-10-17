@@ -1,5 +1,5 @@
 """A round of `/fab0:run`: `next --apply` performs what is due and hands out from one pass over the tracker, `record`
-reads no tracker, and the session records and commits a round's hand-outs in one turn."""
+reads no tracker, and the session records a round's hand-outs in one turn: `record` commits."""
 
 import json
 import os
@@ -42,7 +42,7 @@ def second_factory(name: str, tmp_path: Path, gh: dict) -> Factory:
 
 
 def implemented(f, unit: str, rel: str, repo: str = "backend") -> dict:
-    """What a session does with a unit's hand-out: its worktree, its files, its record and its commit."""
+    """What a session does with a unit's hand-out: its worktree, its files and its record, which commits them."""
     h = handouts(f.run("next", "412", "--unit", unit))[unit]
     trees = start_work(f, h)
     (trees[repo] / rel).parent.mkdir(parents=True, exist_ok=True)
@@ -50,8 +50,6 @@ def implemented(f, unit: str, rel: str, repo: str = "backend") -> dict:
     returned = trees[repo] / ".." / f"{unit}-return.json"
     returned.write_text(json.dumps({"summary": "Done."}))
     f.run("record", "412", unit, "--return", str(returned))
-    git(trees[repo], "add", "-A")
-    git(trees[repo], "commit", "-q", "-m", f"{unit} attempt 1")
     return h
 
 
@@ -224,8 +222,6 @@ def test_record_of_a_foreach_unit_and_of_a_gate_reads_nothing(story):
     story.reset_calls()
     res = story.run("record", "412", "implement-T1", "--return", str(returned))
     assert story.calls() == [] and res["unit"] == "implement-T1" and res["attempt"] == 1
-    git(trees["backend"], "add", "-A")
-    git(trees["backend"], "commit", "-q", "-m", "T1")
     gate = handouts(story.run("next", "412", "--unit", "implement-T1"))["implement-T1"]
     verdict_file = Path(gate["worktree"]).parent / "verdict.json"
     verdict_file.write_text(json.dumps(verdict("approve")))
@@ -281,23 +277,22 @@ def test_the_skill_runs_a_round_in_four_turns():
     assert not re.search(r"`fab0-resolve apply <run>`", loop), "no separate apply in the loop"
     assert not re.search(r"`fab0-resolve next <run>`", loop), "and no separate next"
     steps = re.findall(r"^\d+\. \*\*(.+?)\.?\*\*", loop, re.M)
-    assert steps == ["Apply and hand out", "Checkouts", "Execute", "Record and commit"]
+    assert steps == ["Apply and hand out", "Checkouts", "Execute", "Record"]
     checkouts = loop[loop.index("2. **Checkouts") : loop.index("3. **Execute")]
     assert "every checkout command of the round, for every hand-out, in one Bash call" in checkouts
-    execute = loop[loop.index("3. **Execute") : loop.index("4. **Record and commit")]
+    execute = loop[loop.index("3. **Execute") : loop.index("4. **Record")]
     assert "<returns>/<unit>.json" not in execute, "no return file is written before the record turn"
-    record = loop[loop.index("**Record and commit") :]
-    assert "&&" in record and "one Bash call" in record, "chained, so a refused record commits nothing"
+    record = loop[loop.index("4. **Record") :]
+    assert "&&" in record and "one Bash call" in record, "chained: written, then recorded"
+    assert "Never commit or push yourself" in record, "record commits the work"
     assert "one message" in record, "a round's calls go in one message"
     assert "`line`" in loop and "applied" in loop, "what apply did, and the start and end lines, are still shown"
     chain = record[record.index("```bash") :]
     chain = chain[: chain.index("```", 3)]
     assert "<<'FAB0_RETURN'" in chain, "the return file is written inside the call, by a quoted heredoc"
-    order = [
-        chain.index(x)
-        for x in ("cat > <returns>/<unit>.json", "fab0-resolve record", "git -C <worktree> add", "|| echo")
-    ]
-    assert order == sorted(order), "written, then recorded, then committed"
+    order = [chain.index(x) for x in ("cat > <returns>/<unit>.json", "fab0-resolve record", "|| echo")]
+    assert order == sorted(order), "written, then recorded"
+    assert "git -C" not in chain, "the session commits nothing"
     assert "--return <returns>/<unit>.json" in chain, "record reads the file the call wrote"
     assert "<file>" not in record, "no unnamed return file: concurrent calls could share a path"
     assert "<returns>/<unit>.json" in record and "<returns>/<unit>-gate.json" in record, (
@@ -307,13 +302,11 @@ def test_the_skill_runs_a_round_in_four_turns():
 
 
 def chained(f, unit: str, tree: Path, returned: Path, returns: dict) -> str:
-    """The Bash call the skill makes for a hand-out: write the return, record it, and commit only when it was
-    recorded. The form is the skill's own: a heredoc on the first line, the chain continued after it."""
-    message = f"{unit} attempt 1 (fab0 test): Done."
+    """The Bash call the skill makes for a hand-out: write the return and record it, which commits the work. The
+    form is the skill's own: a heredoc on the first line, the chain continued after it."""
     return (
         f"mkdir -p {returned.parent} && cat > {returned} <<'FAB0_RETURN' \\\n"
         f"  && {sys.executable} {SCRIPT} record 412 {unit} --return {returned} \\\n"
-        f"  && git -C {tree} add -A && git -C {tree} commit -q -m '{message}' \\\n"
         f'  || echo "failed: exit $?"\n'
         f"{json.dumps(returns)}\n"
         f"FAB0_RETURN\n"
@@ -354,15 +347,21 @@ def test_a_refused_record_commits_nothing_and_the_others_do(story):
     for unit in ("implement-T1", "implement-T3"):
         repo, tree, _ = work[unit]
         assert '"verified": true' in out[unit].stdout and "failed: exit" not in out[unit].stdout, out[unit].stdout
-        assert git(tree, "log", "-1", "--format=%s") == f"{unit} attempt 1 (fab0 test): Done."
+        assert committed(tree, unit)
         assert git(tree, "status", "--short") == ""
     repo, tree, returned = work["implement-T2"]
     assert "doesn't match its schema" in out["implement-T2"].stdout and "failed: exit 4" in out["implement-T2"].stdout
-    assert git(tree, "log", "-1", "--format=%s") != "implement-T2 attempt 1 (fab0 test): Done.", "not committed"
-    assert not list((tree / "work" / "412" / "ledger").glob("implement-T2-*")), "and no entry was written"
+    assert not committed(tree, "implement-T2"), "not committed"
+    assert "implement-T2-1" not in story.facts("412"), "and no entry was written"
     again = turn("implement-T2", ok)  # the agent called again with the errors
     assert '"verified": true' in again.stdout and "failed: exit" not in again.stdout
-    assert git(tree, "log", "-1", "--format=%s") == "implement-T2 attempt 1 (fab0 test): Done."
+    assert committed(tree, "implement-T2")
+    assert set(story.facts("412")) >= {"implement-T1-1", "implement-T2-1", "implement-T3-1"}
+
+
+def committed(tree: Path, unit: str) -> bool:
+    subject = git(tree, "log", "-1", "--format=%s")
+    return subject.startswith(f"{unit} attempt 1 (fab0 ") and subject.endswith("): Done.")
 
 
 def test_a_round_of_next_apply_needs_no_other_tracker_pass(story):

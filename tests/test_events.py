@@ -18,6 +18,7 @@ from test_apply import ONE_TASK, gh, implement, spec_done
 from test_conflicts import remotes
 from test_dependencies import TASKS, blocked_by, issue
 from test_gates import record_gate, verdict
+from test_inbox import FACT
 from test_lifecycle import run_of
 from test_run import BRIEF, DOCS_GH, SPEC, do_spec, finish, handouts, start_work, started
 
@@ -254,21 +255,17 @@ def test_a_unit_blocked_by_a_signal_is_logged_and_one_that_waits_its_turn_is_not
     assert not any(e.get("unit") == "implement-T2" for e in events(story) if e["kind"] in ("blocked", "waiting"))
 
 
-def test_every_push_of_the_ledger_branch_is_logged(factory):
+def test_every_push_of_the_run_store_is_logged(factory):
     gh = {"user": "u", "issues": {"acme/support#7": {"title": "Fails", "body": "x", "labels": ["needs-triage"]}}}
     f = factory("triage").init_git(gh)
     remotes(f)
     f.run("apply", "7")
     handouts(f.run("next", "7"))
-    f.checkout("home", "fab0/ledger", "main")
     for n in (1, 2):
-        f.write("home", f"triage/7/notes{n}.txt", "x\n")
-        f.commit("home", f"classify attempt {n}")
-        f.checkout("home", "main")
-        assert {"ledger": "pushed fab0/ledger"} in f.run("apply", "7")["applied"]
-        f.checkout("home", "fab0/ledger")
-    pushes = [e["line"] for e in events(f, "7") if e["kind"] == "apply" and "ledger" in e["line"]]
-    assert pushes == ["apply: ledger: pushed fab0/ledger"] * 2
+        f.put_fact("7", f"note-{n}", {**FACT, "step": "note", "attempt": n})  # recorded, not pushed
+        assert {"store": "pushed 1 write"} in f.run("apply", "7")["applied"]
+    pushes = [e["line"] for e in events(f, "7") if e["kind"] == "apply" and "store" in e["line"]]
+    assert pushes == ["apply: store: pushed 1 write"] * 2
 
 
 def test_a_gated_block_that_waits_is_logged_with_its_attempt(factory):
