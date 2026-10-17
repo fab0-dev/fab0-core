@@ -14,6 +14,7 @@ Arguments: the first is the run id: the number of the run's tracker item, or a m
 ## Rules
 
 - Never merge, push, open or edit pull requests, or write to the tracker yourself. `next --apply` does all of it, within the project's merge policy.
+- Never write in the run store: its checkout, its outboxes and its branches are the engine's. The run store is the runs repository that holds the run's ledger and its store artifacts; `validate` names it under `store`.
 - Never force-push, rebase, stash or discard anyone's changes. If a checkout a hand-out names has changes nobody recorded, stop and ask.
 - Pass every brief verbatim. Don't add to it, shorten it or explain it.
 - Run every `fab0-resolve` command from the home checkout, never from inside a unit's worktree.
@@ -23,15 +24,15 @@ Arguments: the first is the run id: the number of the run's tracker item, or a m
 
 ## Before the loop
 
-1. `fab0-resolve validate`. If it fails, show the errors and stop. If it fails with an `error` and a `fix` list (the engine is older than the installed plugin), show the `error` and every `fix` line verbatim, and stop: don't try another engine, and fetch, apply and hand out nothing. Keep its `workspace`: repository names and their local paths.
+1. `fab0-resolve validate`. If it fails, show the errors and stop; an unreachable run store is one of them. If it fails with an `error` and a `fix` list (the engine is older than the installed plugin), show the `error` and every `fix` line verbatim, and stop: don't try another engine, and fetch, apply and hand out nothing. Keep its `workspace`: repository names and their local paths.
 2. For each repository with `present: true` and an `origin` remote, run `git -C <path> fetch --prune origin`. Say which repositories are missing; the run may not need them.
 
 ## The loop
 
 Repeat:
 
-1. **Apply and hand out.** `fab0-resolve next <run> --apply`: it performs what is due, as `apply` does, then hands out what is ready, from the same read of the tracker. In the first round only, first show its `follow` verbatim, as the command to paste into any terminal on this machine to follow the run's events; don't show it again in later rounds. Then show what it did as a short list, one line per entry of `applied`, in its order, saying what the entry holds (a merge, a pull request with its link, a sync, an action, a signal) without interpreting it. If `applied` is empty, say in one line that `apply` did nothing. If it fails, show the error and stop; it handed out nothing. If `kind` is `done`, or `waiting` (the run's pull request waits on a person), go to the end. If it is refused because `--unit` isn't ready (exit 4), show the error and what it applied, and stop.
-   Take its `handouts`, leaving out those with `executor: action`: `apply` performs actions. If none are left, go to the end.
+1. **Apply and hand out.** `fab0-resolve next <run> --apply`: it performs what is due, as `apply` does, then hands out what is ready, from the same read of the tracker. In the first round only, first show its `follow` verbatim, as the command to paste into any terminal on this machine to follow the run's events; don't show it again in later rounds. Then show what it did as a short list, one line per entry of `applied`, in its order, saying what the entry holds (a merge, a pull request with its link, a review branch updated in the runs repository, a person's edit recorded as an attempt, a sync, an action, a signal, a push of the run store) without interpreting it. If `applied` is empty, say in one line that `apply` did nothing. If it fails, show the error and stop; it handed out nothing. If `kind` is `done`, or `waiting` (the run's pull request waits on a person), go to the end. If it is refused because `--unit` isn't ready (exit 4), show the error and what it applied, and stop.
+   Take its `handouts`, leaving out those with `executor: action`: `apply` performs actions. If none are left, go to the end. A unit `running` with `claimed: elsewhere` is another machine's: it isn't handed out here, so leave it.
    Then, before any checkout or agent starts, show each remaining hand-out's `line` (its start line), one per hand-out, all of the round's together. Show nothing for an action.
 2. **Checkouts.** Run every checkout command of the round, for every hand-out, in one Bash call: one command per line, in the order below and hand-out by hand-out, not chained with `&&`, so that one that fails doesn't stop the others. Read each one's output. For each hand-out, in the repository each entry of `branches` names:
    - an entry without `worktree` that doesn't exist: `git -C <path> branch <branch> <from>`. Another hand-out may have created it already; that is fine.
@@ -44,7 +45,7 @@ Repeat:
    - **agent** (a unit or a gate): call the Agent tool with `subagent_type` = `agent`, `model` = `model` and `prompt` = `brief`. Send all of the round's Agent calls in one message so they run in parallel, in the foreground: never with `run_in_background`, and never one after the other to make them easier to follow. Claude Code then shows each agent's activity (its tool calls) while it works. Wait for every one. Take the JSON object from each agent's final message (inside a code fence, take the fence's content), and keep it for step 4: it is written there, not now.
    - **command**: run `command` with the unit's `worktree` (a gate's `worktree`; the home checkout for a unit with no `branches`) as the working directory, and keep its exit code. For a gate, save its output to `<returns>/<unit>-gate.txt` in the same call.
    - **tool**: call the tool named in `tool` with `with` as its arguments. If this session doesn't have that tool, don't imitate it: report it and stop. Then make the return for step 4, valid against `return_schema`: `summary` is one line on what the call did, plus `data` if the schema asks for it, taken from the tool's result.
-4. **Record**, each hand-out, in one Bash call per hand-out: write its return file, then `record`, chained with `&&`. `record` commits the unit's work on its branch and writes its ledger entry into the run store; a refused record commits nothing. Never commit or push yourself. Send all of the round's calls in one message, so they run together. End each call with `|| echo "failed: exit $?"`, so that a refusal doesn't stop the others of its message.
+4. **Record**, each hand-out, in one Bash call per hand-out: write its return file, then `record`, chained with `&&`. `record` commits the unit's work on its branch, pushes the branch once it has commits, and writes its ledger entry into the run store; a refused record commits nothing. A store artifact the agent wrote in its hand-out's `outbox` goes into the run store with it. Never commit or push yourself. Send all of the round's calls in one message, so they run together. End each call with `|| echo "failed: exit $?"`, so that a refusal doesn't stop the others of its message.
    - the return file: `<returns>/<unit>.json` for a unit, `<returns>/<unit>-gate.json` for a gate. Each hand-out has its own, so the round's calls, which run together, never share a path and never read each other's return. Write it as a quoted heredoc inside the call, before `record`, so no other turn writes it. Use a delimiter the JSON can't hold (`FAB0_RETURN`). Command units and gates, which return an exit code, have no return file: record them with `--exit <code>` (a gate's output is already saved in `<returns>/<unit>-gate.txt`);
    - a unit: `fab0-resolve record <run> <unit> --return <returns>/<unit>.json`, or `--exit <code>` for a command;
    - a gate: `fab0-resolve record <run> <unit> --gate --return <returns>/<unit>-gate.json`, or `--gate --exit <code> --output <returns>/<unit>-gate.txt` for a command.
@@ -62,6 +63,7 @@ Repeat:
    - `verified: false` is not a failure of yours: say so and go on. The next round hands the unit out again with the failures in its brief.
    - If a result lists `outside`, tell the person: files appeared beside the repositories while the unit ran.
    - If a result has `unpushed`, say so in one line: the entry is recorded here, and the next `apply` pushes it.
+   - If a result has `unpushed_branches`, say so in one line: the unit's commits are on its branch here, and `apply` pushes the branch before it merges it or opens its pull request.
 5. Go back to 1.
 
 Stop early if a round hands out exactly what the round before handed out, with the same attempts, after they were recorded: something is wrong. Report it.
@@ -74,6 +76,6 @@ Stop early if a round hands out exactly what the round before handed out, with t
    - what ran: each unit or gate, its executor, attempt and model, and whether it was verified or what the gate decided;
    - how long each unit took: the `took` of every unit in `status` that has one. Leave it out for a unit that has none;
    - what `apply` did over the run, with links to pull requests and items;
-   - what the run waits for now, and on whom: units `waiting` (a human gate, questions, an escalation) and units `blocked` with their reasons. Leave out units that only wait their turn (`order`, `data`, `claim`, `limit`).
+   - what the run waits for now, and on whom: units `waiting` (a human gate, questions, an escalation), units another machine is running (`claimed: elsewhere`), and units `blocked` with their reasons. A human gate on a unit whose outputs are all in the run store is decided in its review pull request in the runs repository; questions on a unit with no pull request are on the run's item. Leave out units that only wait their turn (`order`, `data`, `claim`, `limit`).
 
 Then stop. Don't start other runs.

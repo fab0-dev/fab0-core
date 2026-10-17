@@ -109,3 +109,13 @@ def test_an_unreadable_last_line_is_not_the_latest_event(story):
         fh.write('{"time": "2026-10-16T')  # an event still being written
     res = story.run("inbox", "--as", "po-user")
     assert res["runs"][0]["latest"]["line"] == complete[-1]["line"]
+
+
+def test_a_unit_another_machine_took_waits_on_it(story):
+    remotes(story)
+    story.run("apply", "412")
+    claim = {"actor": "be-user", "machine": "e" * 32, "at": "2026-10-17T10:00:00Z"}
+    story.put_fact("412", "spec-1-claim", claim)
+    res = story.run("inbox", "--as", "po-user")
+    assert res["ready"] == [], "not this person's to run"
+    assert {"run": "412", "unit": "spec", "reason": {"claimed": "elsewhere"}, "owner": None} in res["waiting"]

@@ -160,9 +160,19 @@ class Factory:
         change(data)
         (self.home / ".fab0" / rel).write_text(yaml.safe_dump(data, sort_keys=False))
 
+    def github(self) -> Path:
+        """Where `https://github.com/` points for git in the engine's commands: a local folder, so no test reaches
+        GitHub. A test that needs `owner/repo` to exist puts a bare repository at `<this>/owner/repo.git`."""
+        return self.gh_path.parent / "github"
+
     def env(self) -> dict:
         path = f"{Path(__file__).parent / 'bin'}{os.pathsep}{os.environ['PATH']}"  # stand-in linters
-        return {**os.environ, "FAB0_GH_FAKE": str(self.gh_path), "PATH": path}
+        github = {
+            "GIT_CONFIG_COUNT": "1",
+            "GIT_CONFIG_KEY_0": f"url.{self.github()}/.insteadOf",
+            "GIT_CONFIG_VALUE_0": "https://github.com/",
+        }
+        return {**os.environ, "FAB0_GH_FAKE": str(self.gh_path), "PATH": path, **github}
 
     def text(self, *args: str, expect: int | None = 0, cwd: Path | None = None, env: dict | None = None):
         """A command whose success output is text (`log`): the completed process."""
