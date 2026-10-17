@@ -60,12 +60,6 @@ class Repo:
             raise Fail(EXIT_ERROR, f"git merge-tree failed in {self.name}: {run.stderr.decode().strip()}")
         return []
 
-    def removed_at(self, ref: str, path: str) -> str | None:
-        """The commit before the one that removed `path` on `ref`'s history, if one did."""
-        run = self._git("log", "-1", "--format=%H", "--diff-filter=D", ref, "--", path)
-        sha = run.stdout.decode().strip()
-        return f"{sha}^" if run.returncode == 0 and sha else None
-
     def read_file(self, ref: str, path: str) -> bytes | None:
         run = self._git("cat-file", "blob", f"{ref}:{path}")
         return run.stdout if run.returncode == 0 else None
@@ -137,8 +131,8 @@ def scope_diff(before: dict, after: dict) -> list[str]:
 
 
 class Writer:
-    """The few writes `apply` makes in a repository: merge one branch into another, commit a removal, create
-    a branch, push. Branches that aren't checked out are changed through plumbing, so nobody's checkout moves;
+    """The few writes `apply` makes in a repository: merge one branch into another, make an empty commit,
+    create a branch, push. Branches that aren't checked out are changed through plumbing, so nobody's checkout moves;
     a branch that is checked out is changed in its checkout, and only when that checkout is clean."""
 
     def __init__(self, repo: Repo):
@@ -226,8 +220,8 @@ class Writer:
         repo._trees.clear()
         return {"merged": sha}
 
-    def commit(self, branch: str, message: str, remove: list[str] = (), allow_empty: bool = False) -> str | None:
-        """A commit on `branch` that removes `remove`, made in a scratch index; None if there was nothing to do."""
+    def commit(self, branch: str, message: str, allow_empty: bool = False) -> str | None:
+        """A commit on `branch` with its tree as it is, made in a scratch index; None if there was nothing to do."""
         import tempfile
 
         repo = self.repo
@@ -235,8 +229,6 @@ class Writer:
         with tempfile.TemporaryDirectory() as tmp:
             env = {"GIT_INDEX_FILE": str(Path(tmp) / "index")}
             self.must("read-tree", head, env=env)
-            if remove:
-                self.must("rm", "-r", "-q", "--cached", "--ignore-unmatch", "--", *remove, env=env)
             tree = self.must("write-tree", env=env)
         if tree == self.must("rev-parse", f"{head}^{{tree}}") and not allow_empty:
             return None

@@ -91,7 +91,7 @@ def test_the_run_ends_after_its_items_other_sub_issues(story):
     record_gate(story, "412", "implement-T1", verdict("approve"))
     res = story.run("apply", "412")
     assert states(res)["implement-T1"] == ("done", None)
-    assert actions(res)["onEnd-2"] == ("git.remove-run-artifacts", "blocked", {"tracker": ["acme/shop#600"]})
+    assert actions(res)["onEnd-2"] == ("pr.ready", "blocked", {"tracker": ["acme/shop#600"]})
     assert not any(a["unit"].startswith("onEnd") for a in res["applied"])
     issue(story, "acme/shop#600", state="closed")
     assert "onEnd-2" in {a["unit"] for a in story.run("apply", "412")["applied"]}

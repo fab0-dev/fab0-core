@@ -1,5 +1,4 @@
 artifact: pages
-kind: file
-file: {repo: home, path: "work/{run}/pages.json", format: json}
+kind: store
+store: {format: json}
 elements: {id: slug, title: heading, paths: file}
-keep: run

@@ -187,8 +187,7 @@ def spec_files(f) -> tuple[dict, dict]:
     trees = start_work(f, h)
     (trees["home"] / "specs").mkdir()
     (trees["home"] / "specs" / "412.md").write_text(SPEC)
-    (trees["home"] / "work" / "412").mkdir(parents=True)
-    (trees["home"] / "work" / "412" / "tasks.yaml").write_text(INDEPENDENT)
+    (Path(h["outbox"]) / "tasks.yaml").write_text(INDEPENDENT)
     returned = trees["home"] / ".." / "spec-return.json"
     returned.write_text(json.dumps({"summary": "Wrote the spec."}))
     return h, {"tree": trees["home"], "return": returned}

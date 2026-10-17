@@ -272,7 +272,7 @@ def test_a_gated_block_that_waits_is_logged_with_its_attempt(factory):
     f = factory("docs").init_git(DOCS_GH)
     start_docs(f)
     brief = handouts(f.run("next", "docs-1"))["brief"]
-    files = {("home", "briefs/docs-1.md"): BRIEF, ("home", "work/docs-1/pages.json"): "[]"}
+    files = {("home", "briefs/docs-1.md"): BRIEF, ("out", "pages.json"): "[]"}
     finish(f, "docs-1", brief, start_work(f, brief), files, {"summary": "Nothing to write."})
     f.merge("home", "docs/docs-1--brief", "docs/docs-1")
     for unit in ("parallel-3--spelling", "parallel-3--links", "parallel-3--index"):
@@ -375,7 +375,7 @@ def test_a_log_that_cant_be_written_is_a_warning_and_nothing_else(unwritable):
     spec = f.run("next", "412")
     assert len(warned(spec)) == 1 and [h["unit"] for h in spec["handouts"]] == ["spec"]
     h = spec["handouts"][0]
-    files = {("home", "specs/412.md"): SPEC, ("home", "work/412/tasks.yaml"): ONE_TASK}
+    files = {("home", "specs/412.md"): SPEC, ("out", "tasks.yaml"): ONE_TASK}
     rec = finish(f, "412", h, start_work(f, h), files, {"summary": "Wrote it."})
     assert rec["verified"] and len(warned(rec)) == 1 and rec["line"].startswith("spec, attempt 1: ")
     assert gh(f)["pulls"]["acme/shop"][0]["draft"], "the work itself was done"

@@ -5,6 +5,6 @@ skills: [spec-format]
 inputs: [intent]
 outputs: [spec, tasks]
 repos: {write: [home], read: [all]}
-paths: ["specs/**", "work/**"]
+paths: ["specs/**"]
 return: {questions: optional}
 owner: product-owner

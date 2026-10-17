@@ -8,6 +8,8 @@ from pathlib import Path
 
 from conftest import SCRIPT, git, start_docs
 from fab0_engine.hashing import sha_json
+from fab0_engine.schedule import Ctx, Run
+from fab0_engine.wiring import Wiring
 from test_run import (
     BRIEF,
     DOCS_GH,
@@ -19,6 +21,7 @@ from test_run import (
     start_work,
     started,
     states,
+    sync_children,
 )
 
 ONE_TASK = "- {id: T1, title: Booking API, repo: backend, files: [src/a.py]}\n"
@@ -58,7 +61,7 @@ def test_inputs_and_outputs_are_hashed_in_the_ledger(story):
 def test_failed_checks_hand_out_a_new_attempt_with_the_findings(story):
     started(story)
     h = handouts(story.run("next", "412"))["spec"]
-    files = {("home", "specs/412.md"): "# Spec\n\n## Intent\n", ("home", "work/412/tasks.yaml"): "- {id: X}\n"}
+    files = {("home", "specs/412.md"): "# Spec\n\n## Intent\n", ("out", "tasks.yaml"): "- {id: X}\n"}
     res = finish(story, "412", h, start_work(story, h), files, {"summary": "Wrote it."})
     assert not res["verified"] and res["failed"] == ["spec", "tasks"]
     nxt = story.run("next", "412")
@@ -71,7 +74,7 @@ def test_failed_checks_hand_out_a_new_attempt_with_the_findings(story):
 
 def test_checks_that_keep_failing_stop_the_unit(story):
     started(story)
-    bad = {("home", "specs/412.md"): "# no sections\n", ("home", "work/412/tasks.yaml"): ONE_TASK}
+    bad = {("home", "specs/412.md"): "# no sections\n", ("out", "tasks.yaml"): ONE_TASK}
     for attempt in (1, 2, 3):
         h = handouts(story.run("next", "412"))["spec"]
         assert h["attempt"] == attempt
@@ -86,7 +89,7 @@ def test_a_lint_verifier_runs_on_the_written_file(factory):
     start_docs(f)
     h = handouts(f.run("next", "docs-1"))["brief"]
     pages = json.dumps([{"slug": "intro", "file": "docs/intro.md"}])
-    files = {("home", "briefs/docs-1.md"): BRIEF + "LINT-FAIL\n", ("home", "work/docs-1/pages.json"): pages}
+    files = {("home", "briefs/docs-1.md"): BRIEF + "LINT-FAIL\n", ("out", "pages.json"): pages}
     res = finish(f, "docs-1", h, start_work(f, h), files, {"summary": "Planned."})
     assert res["failed"] == ["brief"]
     assert "MD000 the test asked this file to fail" in res["recorded"]["verify"]["brief"][0]
@@ -109,7 +112,7 @@ def test_a_changed_input_makes_done_work_stale(story):
     assert h["branches"][-1]["sync"] and h["branches"][-1]["from"] == "fab0/412/base"
     tree = Path(h["branches"][-1]["worktree"])
     git(tree, "merge", "-q", "fab0/412/base")  # what the session does for `sync`
-    files = {("home", "specs/412.md"): SPEC + "- S2: up to three nights\n", ("home", "work/412/tasks.yaml"): ONE_TASK}
+    files = {("home", "specs/412.md"): SPEC + "- S2: up to three nights\n", ("out", "tasks.yaml"): ONE_TASK}
     finish(story, "412", h, {"home": tree}, files, {"summary": "Three nights."})
     story.merge("home", "fab0/412/spec", "fab0/412/base")
     assert states(story.run("status", "412"))["implement-T1"] == ("ready", {"rework": ["stale"]})
@@ -213,7 +216,7 @@ def test_comments_of_an_earlier_merged_pull_request_stay_in_the_brief(story):
     story.edit("steps/spec.yaml", lambda d: d.update(inputs=["intent", "reviews"]))
     started(story)
     h = handouts(story.run("next", "412"))["spec"]
-    files = {("home", "specs/412.md"): SPEC, ("home", "work/412/tasks.yaml"): ONE_TASK}
+    files = {("home", "specs/412.md"): SPEC, ("out", "tasks.yaml"): ONE_TASK}
     finish(story, "412", h, start_work(story, h), files, {"summary": "Wrote the spec."})
     data = gh(story)
     later = {"id": 2, "state": "COMMENTED", "user": "po-user", "body": "And keep it short."}
@@ -288,7 +291,7 @@ def test_a_removed_output_is_written_again(story):
         "412",
         h,
         trees,
-        {("home", "specs/412.md"): SPEC, ("home", "work/412/tasks.yaml"): TASKS},
+        {("home", "specs/412.md"): SPEC, ("out", "tasks.yaml"): TASKS},
         {"summary": "Wrote the spec."},
     )
     git(trees["home"], "rm", "-q", "specs/412.md")
@@ -305,7 +308,7 @@ def test_an_edit_by_a_person_keeps_the_attempt(story):
         "412",
         h,
         trees,
-        {("home", "specs/412.md"): SPEC, ("home", "work/412/tasks.yaml"): TASKS},
+        {("home", "specs/412.md"): SPEC, ("out", "tasks.yaml"): TASKS},
         {"summary": "Wrote the spec."},
     )
     (trees["home"] / "specs" / "412.md").write_text(SPEC + "- S2: a person added this\n")
@@ -361,7 +364,7 @@ def test_a_comment_review_on_the_spec_reworks_it(story):
     story.edit("steps/spec.yaml", lambda d: d.update(inputs=["intent", "reviews"]))
     started(story)
     h = handouts(story.run("next", "412"))["spec"]
-    files = {("home", "specs/412.md"): SPEC, ("home", "work/412/tasks.yaml"): ONE_TASK}
+    files = {("home", "specs/412.md"): SPEC, ("out", "tasks.yaml"): ONE_TASK}
     finish(story, "412", h, start_work(story, h), files, {"summary": "Wrote the spec."})
     assert states(story.run("status", "412"))["spec"] == ("waiting", {"gate": "human"})
     data = gh(story)
@@ -381,7 +384,7 @@ def test_a_merge_decides_over_the_reviews_before_it(story):
     story.edit("steps/spec.yaml", lambda d: d.update(inputs=["intent", "reviews"]))
     started(story)
     h = handouts(story.run("next", "412"))["spec"]
-    files = {("home", "specs/412.md"): SPEC, ("home", "work/412/tasks.yaml"): ONE_TASK}
+    files = {("home", "specs/412.md"): SPEC, ("out", "tasks.yaml"): ONE_TASK}
     finish(story, "412", h, start_work(story, h), files, {"summary": "Wrote the spec."})
     data = gh(story)
     review = {"id": 1, "state": "COMMENTED", "user": "po-user", "body": "Answer: a demo hotel."}
@@ -398,7 +401,7 @@ def test_reviews_of_a_merged_pull_request_stay_with_the_unit(story):
     story.edit("steps/spec.yaml", lambda d: d.update(inputs=["intent", "reviews"]))
     started(story)
     h = handouts(story.run("next", "412"))["spec"]
-    files = {("home", "specs/412.md"): SPEC, ("home", "work/412/tasks.yaml"): ONE_TASK}
+    files = {("home", "specs/412.md"): SPEC, ("out", "tasks.yaml"): ONE_TASK}
     finish(story, "412", h, start_work(story, h), files, {"summary": "Wrote the spec."})
     data = gh(story)
     answer = {"id": 1, "state": "COMMENTED", "user": "po-user", "body": "Answer: a demo hotel."}
@@ -442,3 +445,52 @@ def test_an_issue_artifact_reads_a_board_field_and_a_units_own_item(story):
     brief = handouts(story.run("next", "412"))["implement-T1"]["brief"]
     assert "The State field of the run's tracker item:\n\n````\nStarted" in brief
     assert "The body of acme/shop#500:\n\n````\nKeep the API stable." in brief
+
+
+# ------------------------------------------------------------ store artifacts (MIGRATION M3a)
+
+
+def test_a_store_artifact_is_an_object_in_the_run_store_and_never_in_a_repository(story):
+    started(story)
+    h = handouts(story.run("next", "412"))["spec"]
+    assert h["outbox"].endswith("/fab0/out/412/spec-1") and Path(h["outbox"]).is_dir()
+    assert f"- tasks: write `tasks.yaml` in `{h['outbox']}`, outside every repository" in h["brief"]
+    files = {("home", "specs/412.md"): SPEC, ("out", "tasks.yaml"): TASKS}
+    res = finish(story, "412", h, start_work(story, h), files, {"summary": "Wrote the spec."})
+    assert res["verified"] and not Path(h["outbox"]).exists(), "the outbox is emptied once recorded"
+    digest = res["recorded"]["outputs"]["tasks"]
+    objects = story.store_path() / "runs" / "shop" / "412" / "objects"
+    assert (objects / f"sha256-{digest[7:]}.yaml").read_text() == TASKS
+    story.merge("home", "fab0/412/spec", "fab0/412/base")
+    sync_children(story, TASKS)  # the foreach's onStart: a sub-issue per task in the object
+    t1 = handouts(story.run("next", "412"))["implement-T1"]
+    assert t1["element"] == {"id": "T1", "title": "Booking API", "repo": "backend", "files": ["src/a.py"]}
+    assert set(states(story.run("status", "412"))) >= {"implement-T1", "implement-T2", "implement-T3"}
+    files = git(story.repo("home"), "log", "--all", "--name-only", "--format=").split()
+    work = [f for f in files if not f.startswith((".fab0/", ".claude/"))]  # past the wiring, the run's own files
+    assert "specs/412.md" in work and not [f for f in work if "tasks" in f], "only the spec reached the repository"
+
+
+def test_the_outbox_holds_only_the_steps_outputs(story):
+    started(story)
+    h = handouts(story.run("next", "412"))["spec"]
+    files = {("home", "specs/412.md"): SPEC, ("out", "notes.txt"): "scratch"}
+    res = finish(story, "412", h, start_work(story, h), files, {"summary": "Forgot the tasks."})
+    assert res["recorded"]["verify"]["tasks"] == ["tasks.yaml is missing"]
+    assert res["recorded"]["verify"]["outbox"] == ["notes.txt in the outbox is no output of this step"]
+    assert "tasks" not in res["recorded"].get("outputs", {})
+    assert states(story.run("status", "412"))["spec"] == ("ready", {"rework": ["verify"]})
+
+
+def test_a_version_that_failed_its_checks_is_never_the_latest(story):
+    do_spec(story, tasks="- {id: T1, title: A, repo: backend, files: [a]}\n")
+    story.merge("home", "fab0/412/spec", "fab0/412/base")
+    first = story.fact("412", "spec-1")["outputs"]["tasks"]
+    story.gh_edit(lambda d: d["issues"]["acme/shop#412"].update(body="Guests extend a booking twice."))
+    h = handouts(story.run("next", "412"))["spec"]
+    assert h["attempt"] == 2
+    trees = {"home": Path(h["branches"][-1]["worktree"])}
+    finish(story, "412", h, trees, {("out", "tasks.yaml"): "- {id: X}\n"}, {"summary": "Broke the tasks."})
+    assert story.fact("412", "spec-2")["verify"]["tasks"] != "pass"
+    run = Run(Wiring(story.home), "story", "412", "", None)
+    assert run.latest_object("tasks", Ctx(parent=None)) == first, "the last version that passed"

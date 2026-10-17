@@ -6,6 +6,7 @@ import yaml
 from conftest import git, start_docs
 from fab0_engine.ledger import parse
 from fab0_engine.schedule import Unit
+from fab0_engine.store import GitStore
 from test_gates import ONE_TASK, implement, record_gate, verdict
 from test_run import BRIEF, DOCS_GH, do_spec, finish, handouts, start_work
 
@@ -97,7 +98,7 @@ def gated_block_with_a_decision(factory):
     f = factory("docs").init_git(DOCS_GH)
     start_docs(f)
     brief = handouts(f.run("next", "docs-1"))["brief"]
-    files = {("home", "briefs/docs-1.md"): BRIEF, ("home", "work/docs-1/pages.json"): "[]"}
+    files = {("home", "briefs/docs-1.md"): BRIEF, ("out", "pages.json"): "[]"}
     finish(f, "docs-1", brief, start_work(f, brief), files, {"summary": "Nothing to write."})
     f.merge("home", "docs/docs-1--brief", "docs/docs-1")
     for unit in ("parallel-3--spelling", "parallel-3--links", "parallel-3--index"):
@@ -132,9 +133,10 @@ def test_a_gated_block_keeps_its_duration_once_it_is_done(factory):
 
 def test_a_gated_block_keeps_its_duration_when_a_unit_moves_on(factory):
     f = gated_block_with_a_decision(factory)
-    block_tree = f.block_tree
-    (block_tree / "work" / "docs-1" / "pages.json").write_text('["intro"]')  # an input of a unit moves on
-    git(block_tree, "commit", "-qam", "a new page")
+    pages = GitStore(f.store_path(), f.project_key()).put("docs-1", b"[ ]\n", "json")  # new bytes, same list
+    brief = f.fact("docs-1", "brief-1")  # the brief planned again: an input of a unit moves on
+    later = {"attempt": 2, "started": "2999-01-01T00:00:00Z", "ended": "2999-01-01T00:00:01Z"}
+    f.put_fact("docs-1", "brief-2", {**brief, **later, "outputs": {**brief["outputs"], "pages": pages}})
     res = f.run("status", "docs-1")
     assert unit_of(res, "parallel-3--index")["state"] in ("ready", "running"), "the unit asks for a new attempt"
     block = unit_of(res, "parallel-3")

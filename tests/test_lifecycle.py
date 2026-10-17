@@ -45,7 +45,7 @@ def test_a_foreach_waits_for_its_own_onstart(story):
         "412",
         h,
         start_work(story, h),
-        {("home", "specs/412.md"): SPEC, ("home", "work/412/tasks.yaml"): tasks},
+        {("home", "specs/412.md"): SPEC, ("out", "tasks.yaml"): tasks},
         {"summary": "Spec."},
     )
     story.merge("home", "fab0/412/spec", "fab0/412/base")

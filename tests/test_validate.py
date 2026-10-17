@@ -39,6 +39,15 @@ def test_the_store_block(factory):
     assert "store" in messages(f)
 
 
+def test_keep_and_the_removal_action_are_refused_with_a_hint(factory):
+    f = factory("story")
+    f.edit("artifacts/spec.yaml", lambda d: d.update(keep="durable"))
+    assert "keep is gone in fab0 0.7" in messages(f)
+    f = factory("docs")
+    f.edit("pipelines/docs.yaml", lambda d: d["onEnd"].insert(0, "git.remove-run-artifacts"))
+    assert "fab0 0.7 removes nothing at a run's end" in messages(f)
+
+
 def test_a_stages_directory_is_refused(factory):
     f = factory("story")
     (f.home / ".fab0" / "stages").mkdir()

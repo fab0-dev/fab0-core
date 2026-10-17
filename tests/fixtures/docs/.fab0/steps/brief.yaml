@@ -4,6 +4,6 @@ model: deep
 inputs: [style]
 outputs: [brief, pages]
 repos: {write: [home], read: [all]}
-paths: ["briefs/**", "work/**"]
+paths: ["briefs/**"]
 return: {questions: optional}
 owner: docs-owner

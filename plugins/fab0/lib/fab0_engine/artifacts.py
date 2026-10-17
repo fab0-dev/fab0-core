@@ -2,6 +2,7 @@
 
 Each kind has a hasher, so staleness stays generic:
 - `file`: the file's bytes, or every file under a directory, at the parent branch's head (or in a checkout);
+- `store`: its latest object in the run store, which is named by its hash (D79);
 - `issue`: the part of a tracker item (body, title, labels, comments);
 - `pr`: the part of a pull request (body, reviews that ask for changes or comment together with people's
   conversation comments, diff); no pull request hashes as no reviews;
@@ -29,6 +30,7 @@ from .templates import Unresolved, render
 REVIEW_STATES = ("CHANGES_REQUESTED", "COMMENTED")
 TRACKED = ("issue", "pr")  # the kinds of artifact that are read from the tracker
 INLINE_LIMIT = 64 * 1024  # text up to this size goes in a brief, so agents need no git to read it
+EXTENSIONS = {"markdown": "md", "text": "txt"}  # a store object's extension, where it isn't its format's name
 
 
 @dataclass
@@ -84,18 +86,29 @@ def file_view(run, name: str, ctx, tree: Path | None = None) -> View:
     else:
         ref = repo.fresh(run.parent_in(repo, ctx.parent)) or repo.fresh(repo.base)
         content = (repo.read_file(ref, path) or read_tree(repo, ref, path)) if ref else None
-        if (
-            content is None
-            and ref
-            and run.w.artifacts[name].get("keep") == "run"
-            and (gone := repo.removed_at(ref, path))
-        ):
-            content = repo.read_file(gone, path) or read_tree(repo, gone, path)  # as it was before the run's end
         where = f"`{repo.name}:{path}` at `{ref}`"
         how = f"Read it with `git -C {repo.path} show {ref}:{path}`."
     if content is None:
         return View(None, f"Not there yet: `{repo.name}:{path}`.", where)
     return View(content_hash(content), show(content, fmt, where, how), where)
+
+
+def store_name(name: str, art: dict) -> str:
+    """The file a step writes a store artifact as, in its outbox: the artifact's name and its format's extension."""
+    fmt = art["store"]["format"]
+    return f"{name}.{EXTENSIONS.get(fmt, fmt)}"
+
+
+def store_view(run, name: str, ctx) -> View:
+    """A store artifact's latest version, from the run store."""
+    art = run.w.artifacts[name]
+    digest = run.latest_object(name, ctx)
+    if digest is None:
+        return View(None, f"Not there yet: no attempt has written {name}.")
+    where = f"`{name}` in the run store, version `{digest}`"
+    path = run.store.path / run.store.run_dir(run.run) / "objects"
+    how = f"Read it in `{path}`, the file named after its hash."
+    return View(digest, show(run.store.get(run.run, digest), art["store"]["format"], where, how), where)
 
 
 def issue_view(run, name: str, ctx) -> View:
@@ -188,6 +201,8 @@ def view(run, name: str, ctx, unit=None) -> View:
     kind = run.w.artifacts[name]["kind"]
     if kind == "file":
         return file_view(run, name, ctx)
+    if kind == "store":
+        return store_view(run, name, ctx)
     if kind == "issue":
         return issue_view(run, name, ctx)
     if kind == "pr":
@@ -221,14 +236,15 @@ def tail(text: str, lines: int = 20) -> str:
 
 def verify(run, name: str, ctx, tree: Path) -> list[str]:
     """Rungs 2 and 3 of the ladder for an output a unit wrote: it exists, parses, matches its schema, and
-    passes the artifact's own verifiers."""
+    passes the artifact's own verifiers. `tree` is the unit's checkout for a file, its outbox for a store
+    artifact."""
     art = run.w.artifacts[name]
-    _, path = run.artifact_location(name, ctx)
+    path = store_name(name, art) if art["kind"] == "store" else run.artifact_location(name, ctx)[1]
     content = read_disk(tree, path)
     if content is None:
         return [f"{path} is missing"]
     errors = []
-    fmt = art["file"].get("format")
+    fmt = (art.get("file") or art.get("store") or {}).get("format")
     if fmt in ("yaml", "json") and isinstance(content, bytes):
         try:
             data = json.loads(content) if fmt == "json" else yaml.safe_load(content)

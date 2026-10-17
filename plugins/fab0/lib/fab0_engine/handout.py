@@ -9,10 +9,11 @@ from __future__ import annotations
 
 import copy
 import json
+import shutil
 import subprocess
 from pathlib import Path
 
-from .artifacts import content_hash, input_hashes, read_disk, verify, view
+from .artifacts import content_hash, input_hashes, read_disk, store_name, verify, view
 from .claims import covers
 from .errors import EXIT_REFUSED, EXIT_USAGE, Fail
 from .git import scope_diff
@@ -114,7 +115,7 @@ def rework_lines(unit: Unit) -> list[str]:
     return lines + [""]
 
 
-def brief(run: Run, unit: Unit, schema: dict, trees: dict[str, str]) -> str:
+def brief(run: Run, unit: Unit, schema: dict, trees: dict[str, str], outbox: Path | None = None) -> str:
     step = unit.step
     title = f"# {step['step']}" + (f" for {unit.element_id}" if unit.element_id else "") + f": run {run.run}"
     lines = [title, "", f"Pipeline {run.name}, attempt {unit.attempt}.", f"Handed out by fab0 {read_version()}.", ""]
@@ -135,6 +136,8 @@ def brief(run: Run, unit: Unit, schema: dict, trees: dict[str, str]) -> str:
             if art["kind"] == "file":
                 repo, path = run.artifact_location(name, unit.ctx)
                 lines.append(f"- {name}: write `{path}` in `{trees.get(repo.name, repo.path)}`")
+            elif art["kind"] == "store":
+                lines.append(f"- {name}: write `{store_name(name, art)}` in `{outbox}`, outside every repository")
             else:
                 lines.append(f"- {name}")
         lines.append("")
@@ -241,6 +244,11 @@ def handout(run: Run, unit: Unit) -> dict:
     if unit.element_id:
         out["element_id"] = unit.element_id
         out["element"] = unit.ctx.element["raw"]
+    outbox = None
+    if any(run.w.artifacts[n]["kind"] == "store" for n in step.get("outputs", [])):
+        outbox = outbox_of(run, unit.id, unit.attempt)
+        outbox.mkdir(parents=True, exist_ok=True)
+        out["outbox"] = str(outbox)
     lookup = run.lookup(unit.ctx)
     try:
         if executor == "agent":
@@ -250,7 +258,7 @@ def handout(run: Run, unit: Unit) -> dict:
             out["skills"] = step.get("skills", [])
             out["return_schema"] = schema
             trees = {b["repo"]: b["worktree"] for b in out["branches"] if "worktree" in b}
-            out["brief"] = brief(run, unit, schema, trees)
+            out["brief"] = brief(run, unit, schema, trees, outbox)
         elif executor == "command":
             out["command"] = render(step["command"], lookup)
         else:
@@ -270,6 +278,12 @@ def handout(run: Run, unit: Unit) -> dict:
         tool=out.get("tool"),
     )
     return out
+
+
+def outbox_of(run: Run, unit: str, attempt: int) -> Path:
+    """Where an attempt writes its store artifacts: under the home repo's git directory, outside every checkout.
+    `record` puts what it finds there into the run store (D79)."""
+    return run.home.common_dir() / "fab0" / "out" / run.run / f"{unit}-{attempt}"
 
 
 def claim(run: Run, unit: Unit) -> bool:
@@ -438,9 +452,22 @@ def record(run: Run, unit_id: str, returned: dict | None, exit_code: int | None)
             entry["questions"] = [local_paths_out(q, trees) for q in returned["questions"]]
         if "data" in returned:
             entry["data"] = returned["data"]
-    outputs, checks = {}, {}
+    outputs, checks, objects = {}, {}, []
+    outbox = Path(pending["outbox"]) if pending.get("outbox") else None
+    expected = set()
     for name in pending["outputs"]:
-        if run.w.artifacts[name]["kind"] != "file":
+        art = run.w.artifacts[name]
+        if art["kind"] == "store":
+            file = store_name(name, art)
+            expected.add(file)
+            content = (outbox / file).read_bytes() if outbox and (outbox / file).is_file() else None
+            if content is not None:
+                outputs[name] = content_hash(content)
+                objects.append((content, file.rsplit(".", 1)[1]))
+            checks[name] = verify(run, name, unit.ctx, outbox) if outbox else [f"{file} is missing"]
+            checks[name] = checks[name] or "pass"
+            continue
+        if art["kind"] != "file":
             continue
         repo, rel = run.artifact_location(name, unit.ctx)
         tree = trees.get(repo.name)
@@ -454,6 +481,9 @@ def record(run: Run, unit_id: str, returned: dict | None, exit_code: int | None)
         checks[name] = errors or "pass"
     for key, errors in check_writes(run, unit, pending, trees).items():
         checks[key] = errors
+    extra = sorted(p.name for p in outbox.iterdir() if p.name not in expected) if outbox and outbox.is_dir() else []
+    if extra:
+        checks["outbox"] = [f"{n} in the outbox is no output of this step" for n in extra]
     if outputs:
         entry["outputs"] = outputs
     if checks:
@@ -470,8 +500,12 @@ def record(run: Run, unit_id: str, returned: dict | None, exit_code: int | None)
     heads = commit_work(trees, pending["starts"], message)
     if heads:
         entry["heads"] = heads
+    for content, ext in objects:  # the versions first, then the entry that names them
+        run.store.put(run.run, content, ext)
     run.store.append(run.run, name, entry)
     path.unlink()
+    if outbox:
+        shutil.rmtree(outbox, ignore_errors=True)
     pushed = push(run)
     failed = sorted(k for k, v in checks.items() if v != "pass")
     questions = len(entry.get("questions", []))
