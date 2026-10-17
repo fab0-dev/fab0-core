@@ -156,8 +156,26 @@ class Writer:
         return self.git("remote", "get-url", "origin").returncode == 0
 
     def push(self, branch: str) -> None:
-        if self.has_remote():
-            self.must("push", "-q", "origin", f"refs/heads/{branch}:refs/heads/{branch}")
+        """Push `branch` to origin. When origin's copy (the ref the session's fetch left) already holds every commit
+        of the local branch, nothing is pushed: the local branch is brought forward to it, within D42, or left
+        where it is when its checkout has changes. A diverged branch is pushed, and GitHub refuses it."""
+        if not self.has_remote():
+            return
+        repo, remote = self.repo, f"origin/{branch}"
+        if repo.ref_exists(branch) and repo.ref_exists(remote):
+            local, theirs = repo.sha(branch), repo.sha(remote)
+            if local == theirs:
+                return
+            if repo.is_ancestor(local, theirs):
+                tree = self.checkout_of(branch)
+                if tree is None or self.clean(tree):
+                    self.set_branch(branch, theirs, "fab0: fast-forward")
+                    repo._fresh.clear()
+                    repo._trees.clear()
+                return
+        run = self.git("push", "-q", "origin", f"refs/heads/{branch}:refs/heads/{branch}")
+        if run.returncode:
+            raise Fail(EXIT_ERROR, f"git push of {branch} failed in {repo.name}: {run.stderr.strip()}")
 
     def checkout_of(self, branch: str) -> Path | None:
         return self.repo.worktrees().get(branch)
