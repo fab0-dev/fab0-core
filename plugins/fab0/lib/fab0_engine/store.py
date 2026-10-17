@@ -73,6 +73,10 @@ class GitStore:
             raise Fail(EXIT_ERROR, f"store: {found[0].relative_to(self.path)} doesn't match its hash")
         return data
 
+    def has_object(self, run: str, digest: str) -> bool:
+        match = DIGEST.match(digest)
+        return bool(match) and any((self.path / self.run_dir(run) / "objects").glob(f"sha256-{match[1]}.*"))
+
     def append(self, run: str, name: str, fact: dict) -> str:
         """Write the fact `name` of `run`: `ok`, or `exists` with nothing written."""
         if not NAME.match(name):

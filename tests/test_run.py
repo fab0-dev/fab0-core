@@ -49,9 +49,10 @@ def start_work(f, handout: dict) -> dict[str, Path]:
 
 
 def finish(f, run: str, handout: dict, trees: dict, files: dict | None = None, returned=None, exit=None, **kw):
-    """Write the files and record the unit, which commits them on its branch."""
+    """Write the files and record the unit, which commits them on its branch. A file keyed ("out", name) is a
+    store artifact, written in the hand-out's outbox."""
     for (repo, rel), text in (files or {}).items():
-        path = trees[repo] / rel
+        path = (Path(handout["outbox"]) if repo == "out" else trees[repo]) / rel
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text)
     args = ["record", run, handout["unit"], *kw.get("extra", [])]
@@ -72,7 +73,7 @@ def do_spec(f, tasks=TASKS, spec=SPEC):
     started(f)
     h = handouts(f.run("next", "412"))["spec"]
     trees = start_work(f, h)
-    files = {("home", "specs/412.md"): spec, ("home", "work/412/tasks.yaml"): tasks}
+    files = {("home", "specs/412.md"): spec, ("out", "tasks.yaml"): tasks}
     finish(f, "412", h, trees, files, {"summary": "Wrote the spec."})
     f.merge("home", "fab0/412/spec", "fab0/412/base")
     sync_children(f, tasks)
@@ -117,9 +118,8 @@ def test_a_run_starts_with_its_onstart_actions(story):
         "onStart-2": ("pr.open-run", "done", None),
         "onStart-3": ("tracker.field", "done", None),
         "onEnd-1": ("git.sync-base", "blocked", {"order": "steps"}),
-        "onEnd-2": ("git.remove-run-artifacts", "blocked", {"order": "steps"}),
-        "onEnd-3": ("pr.ready", "blocked", {"order": "steps"}),
-        "onEnd-4": ("tracker.close", "blocked", {"order": "steps"}),
+        "onEnd-2": ("pr.ready", "blocked", {"order": "steps"}),
+        "onEnd-3": ("tracker.close", "blocked", {"order": "steps"}),
     }
     assert states(res)["spec"] == ("ready", None)
 
@@ -145,7 +145,7 @@ def test_the_first_step_is_ready_and_the_rest_wait_on_it(story):
     ]
     assert h["branches"][0]["worktree"].endswith(".git/fab0/worktrees/412/spec")
     assert "Guests extend a booking." in h["brief"] and "Handed out by fab0" in h["brief"]
-    assert h["claims"] == {"home": ["specs/**", "work/**"]}
+    assert h["claims"] == {"home": ["specs/**"]}, "the task list goes to the run store, not to a repository"
     assert states(story.run("status", "412"))["spec"] == ("running", None)
 
 
@@ -153,7 +153,7 @@ def test_a_recorded_step_waits_on_its_gate_until_merged(story):
     started(story)
     h = handouts(story.run("next", "412"))["spec"]
     trees = start_work(story, h)
-    files = {("home", "specs/412.md"): SPEC, ("home", "work/412/tasks.yaml"): TASKS}
+    files = {("home", "specs/412.md"): SPEC, ("out", "tasks.yaml"): TASKS}
     rec = finish(story, "412", h, trees, files, {"summary": "Wrote the spec."})
     entry = rec["recorded"]
     assert entry["step"] == "spec" and entry["attempt"] == 1 and entry["executor"] == "agent"
@@ -214,7 +214,7 @@ def test_a_list_without_usable_ids_blocks_the_foreach(factory):
     start_docs(f)
     brief = handouts(f.run("next", "docs-1"))["brief"]
     pages = json.dumps([{"slug": "intro", "file": "docs/intro.md"}, {"file": "docs/other.md"}])
-    files = {("home", "briefs/docs-1.md"): BRIEF, ("home", "work/docs-1/pages.json"): pages}
+    files = {("home", "briefs/docs-1.md"): BRIEF, ("out", "pages.json"): pages}
     finish(f, "docs-1", brief, start_work(f, brief), files, {"summary": "Planned."})
     f.merge("home", "docs/docs-1--brief", "docs/docs-1")
     assert states(f.run("status", "docs-1"))["foreach-pages"] == (
@@ -252,11 +252,7 @@ def test_when_runs_its_steps_only_if_the_condition_holds(story):
     story.merge("home", "fab0/412/docs-note", "fab0/412/base")
     end = story.run("status", "412")
     assert states(end)["docs-note"] == ("done", None)
-    assert actions(end)["onEnd-2"] == (
-        "git.remove-run-artifacts",
-        "ready",
-        {"missing": "still there: home:work/412/tasks.yaml"},
-    )
+    assert actions(end)["onEnd-2"] == ("pr.ready", "ready", {"missing": "home: a draft; backend: no pull request"})
 
 
 def test_the_run_ends_with_its_onend_actions_and_a_merge(story):
@@ -267,16 +263,10 @@ def test_the_run_ends_with_its_onend_actions_and_a_merge(story):
     res = story.run("next", "412")
     assert "docs-note" not in states(res) and res["kind"] == "units"
     assert actions(res)["onEnd-1"] == ("git.sync-base", "done", None)
-    assert actions(res)["onEnd-2"][1:] == ("ready", {"missing": "still there: home:work/412/tasks.yaml"})
-    assert [h["unit"] for h in res["handouts"]] == ["onEnd-2"]
-    home = story.repo("home")  # what apply does: remove the run's artifacts on the run branch
-    git(home, "checkout", "-q", "fab0/412/base")
-    git(home, "rm", "-q", "work/412/tasks.yaml")
-    git(home, "commit", "-q", "-m", "remove the run's artifacts")
-    git(home, "checkout", "-q", "main")
-    res = story.run("status", "412")
-    assert states(res)["spec"] == ("done", None) and states(res)["implement-T1"] == ("done", None), "D38"
-    assert actions(res)["onEnd-3"] == ("pr.ready", "ready", {"missing": "home: a draft; backend: no pull request"})
+    assert actions(res)["onEnd-2"] == ("pr.ready", "ready", {"missing": "home: a draft; backend: no pull request"})
+    assert [h["unit"] for h in res["handouts"]] == ["onEnd-2"], "nothing to remove: the task list was never there"
+    assert states(res)["spec"] == ("done", None) and states(res)["implement-T1"] == ("done", None)
+    assert not git(story.repo("home"), "ls-tree", "-r", "--name-only", "fab0/412/base", "--", "work")
 
     def ready(data):
         data["pulls"]["acme/shop"][0]["draft"] = False
@@ -322,7 +312,7 @@ def test_a_gated_block_has_its_own_branch(docs):
     assert brief["branch"] == "docs/docs-1--brief"
     files = {
         ("home", "briefs/docs-1.md"): "# B\n## Intent\n## Findings\n## Outline\n",
-        ("home", "work/docs-1/pages.json"): PAGES,
+        ("out", "pages.json"): PAGES,
     }
     finish(docs, "docs-1", brief, start_work(docs, brief), files, {"summary": "Planned."})
     docs.merge("home", "docs/docs-1--brief", "docs/docs-1")

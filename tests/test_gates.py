@@ -127,7 +127,7 @@ def test_a_human_merge_after_approval(factory):
     start_docs(f)
     brief = handouts(f.run("next", "docs-1"))["brief"]
     pages = json.dumps([{"slug": "intro", "file": "docs/intro.md"}])
-    files = {("home", "briefs/docs-1.md"): BRIEF, ("home", "work/docs-1/pages.json"): pages}
+    files = {("home", "briefs/docs-1.md"): BRIEF, ("out", "pages.json"): pages}
     finish(f, "docs-1", brief, start_work(f, brief), files, {"summary": "Planned."})
     f.merge("home", "docs/docs-1--brief", "docs/docs-1")
     write = handouts(f.run("next", "docs-1"))["write-intro"]
@@ -142,7 +142,7 @@ def test_a_gated_block_is_judged_as_a_whole(factory):
     f = factory("docs").init_git(DOCS_GH)
     start_docs(f)
     brief = handouts(f.run("next", "docs-1"))["brief"]
-    files = {("home", "briefs/docs-1.md"): BRIEF, ("home", "work/docs-1/pages.json"): "[]"}
+    files = {("home", "briefs/docs-1.md"): BRIEF, ("out", "pages.json"): "[]"}
     finish(f, "docs-1", brief, start_work(f, brief), files, {"summary": "Nothing to write."})
     f.merge("home", "docs/docs-1--brief", "docs/docs-1")
     res = f.run("next", "docs-1")
@@ -167,7 +167,7 @@ def test_an_approved_block_merges_and_the_run_ends(factory):
     f = factory("docs").init_git(DOCS_GH)
     start_docs(f)
     brief = handouts(f.run("next", "docs-1"))["brief"]
-    files = {("home", "briefs/docs-1.md"): BRIEF, ("home", "work/docs-1/pages.json"): "[]"}
+    files = {("home", "briefs/docs-1.md"): BRIEF, ("out", "pages.json"): "[]"}
     finish(f, "docs-1", brief, start_work(f, brief), files, {"summary": "Nothing to write."})
     f.merge("home", "docs/docs-1--brief", "docs/docs-1")
     for unit in ("parallel-3--spelling", "parallel-3--links", "parallel-3--index"):

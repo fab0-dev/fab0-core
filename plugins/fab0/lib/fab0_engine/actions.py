@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from .templates import render
 
-RUN_LEVEL = ("git.run-branch", "git.sync-base", "git.remove-run-artifacts", "pr.open-run", "pr.ready", "pr.merge")
+RUN_LEVEL = ("git.run-branch", "git.sync-base", "pr.open-run", "pr.ready", "pr.merge")
 FOREACH_ONLY = ("tracker.child.sync", "tracker.child.close")
 
 
@@ -58,17 +58,6 @@ def check(run, name: str, args: dict, ctx, elements: list | None = None) -> str 
             if ahead(r, run) and not r.is_ancestor(r.fresh(r.base), r.fresh(run.run_branch))
         ]
         return f"{run.run_branch} lacks the latest base in {', '.join(behind)}" if behind else None
-    if name == "git.remove-run-artifacts":
-        left = []
-        for art_name, art in run.w.artifacts.items():
-            spec = art.get("file", {})
-            if art.get("keep") != "run" or "{unit}" in spec.get("path", "") or spec.get("repo", "").startswith("unit."):
-                continue
-            repo, path = run.artifact_location(art_name, ctx)
-            ref = repo.fresh(run.run_branch)
-            if ref and (repo.read_file(ref, path) is not None or repo.names(ref, path)):
-                left.append(f"{repo.name}:{path}")
-        return f"still there: {', '.join(left)}" if left else None
     if name in ("pr.open-run", "pr.ready", "pr.merge"):
         repos = [run.home] if name == "pr.open-run" else [r for r in written(run) if ahead(r, run)]
         if name == "pr.merge":

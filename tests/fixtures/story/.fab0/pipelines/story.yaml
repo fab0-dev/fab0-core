@@ -27,6 +27,5 @@ steps:
         owner: product-owner
 onEnd:
   - git.sync-base
-  - git.remove-run-artifacts
   - pr.ready
   - tracker.close

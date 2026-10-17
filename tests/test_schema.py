@@ -143,8 +143,10 @@ def changed(doc: dict, change) -> dict:
         (changed(story("steps/spec.yaml"), lambda d: d.pop("agent")), "step", "is not valid under any"),
         (changed(story("steps/spec.yaml"), lambda d: d.update(gate="human")), "step", "Additional properties"),
         (changed(story("artifacts/spec.yaml"), lambda d: d.pop("file")), "artifact", "'file' is a required"),
+        (changed(story("artifacts/intent.yaml"), lambda d: d.update(keep="run")), "artifact", "Additional properties"),
+        (changed(story("artifacts/tasks.yaml"), lambda d: d.pop("store")), "artifact", "'store' is a required"),
         (
-            changed(story("artifacts/intent.yaml"), lambda d: d.update(keep="run")),
+            changed(story("artifacts/tasks.yaml"), lambda d: d.update(file={"repo": "home", "path": "t.yaml"})),
             "artifact",
             "should not be valid",
         ),

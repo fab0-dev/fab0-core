@@ -60,16 +60,6 @@ def perform(run: Run, unit: Unit) -> str:
                     EXIT_ERROR, f"{repo.name}: {repo.base} conflicts with {run.run_branch}", conflict=result["conflict"]
                 )
         return f"merged the base into {run.run_branch}"
-    if name == "git.remove-run-artifacts":
-        removed = []
-        for art_name, art in run.w.artifacts.items():
-            spec = art.get("file", {})
-            if art.get("keep") != "run" or "{unit}" in spec.get("path", "") or spec.get("repo", "").startswith("unit."):
-                continue
-            repo, path = run.artifact_location(art_name, unit.ctx)
-            if Writer(repo).commit(run.run_branch, f"fab0: remove run {run.run}'s {art_name}", remove=[path]):
-                removed.append(f"{repo.name}:{path}")
-        return f"removed {', '.join(removed)}"
     if name in ("pr.open-run", "pr.ready"):
         return run_pulls(
             run, draft=bool(args.get("draft")) if name == "pr.open-run" else False, only_home=name == "pr.open-run"

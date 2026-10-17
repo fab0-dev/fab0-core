@@ -57,7 +57,7 @@ from .ledger import check as check_entry
 from .store import open_store
 from .templates import Unresolved
 from .tracker import MAX_IN_FLIGHT
-from .wiring import EXECUTORS, Wiring, base_allowed
+from .wiring import EXECUTORS, Wiring, base_allowed, fmt_of
 
 ELEMENT_KEYS = ("id", "title", "repo", "after", "paths")
 ELEMENT_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
@@ -717,16 +717,34 @@ class Run:
             path = path.replace("{unit}", ctx.element["id"])
         return self.repos[repo], path
 
+    def latest_object(self, name: str, ctx: Ctx | None) -> str | None:
+        """The hash of a store artifact's latest version: the output of the most recent attempt that wrote it and
+        passed its checks. A foreach unit reads its own element's, else the run's (one written outside a foreach)."""
+        found = [
+            f
+            for n, f in self.facts().items()
+            if ATTEMPT.match(n) and name in f.get("outputs", {}) and f.get("verify", {}).get(name) == "pass"
+        ]
+        element = ctx.element["id"] if ctx is not None and ctx.element else None
+        mine = [f for f in found if f.get("unit") == element] or [f for f in found if not f.get("unit")]
+        if not mine:
+            return None
+        return max(mine, key=lambda f: (f.get("ended", ""), f["attempt"]))["outputs"][name]
+
     def read_artifact(self, name: str, ctx: Ctx, parse: bool = True) -> tuple[object, dict | None]:
-        repo, path = self.artifact_location(name, ctx)
-        ref = repo.fresh(self.parent_in(repo, ctx.parent)) or repo.fresh(repo.base)
-        raw = repo.read_file(ref, path) if ref else None
-        if raw is None and ref and self.w.artifacts[name].get("keep") == "run":
-            before = repo.removed_at(ref, path)  # a run artifact the run's end removed: read it as it was (D38)
-            raw = repo.read_file(before, path) if before else None
-        if raw is None:
-            return None, {"data": f"{name} is missing: {repo.name}:{path}"}
-        fmt = self.w.artifacts[name]["file"].get("format")
+        art = self.w.artifacts[name]
+        if art["kind"] == "store":
+            digest = self.latest_object(name, ctx)
+            raw = self.store.get(self.run, digest) if digest else None
+            if raw is None:
+                return None, {"data": f"{name} is missing: no attempt has written it yet"}
+        else:
+            repo, path = self.artifact_location(name, ctx)
+            ref = repo.fresh(self.parent_in(repo, ctx.parent)) or repo.fresh(repo.base)
+            raw = repo.read_file(ref, path) if ref else None
+            if raw is None:
+                return None, {"data": f"{name} is missing: {repo.name}:{path}"}
+        fmt = fmt_of(art)
         if not parse or fmt not in ("yaml", "json"):
             return raw, None
         try:
@@ -1035,6 +1053,8 @@ class Run:
         return art.get("kind") == "pr" and art["pr"].get("of", "run") == "unit"
 
     def output_exists(self, unit: Unit, name: str) -> bool:
+        if self.w.artifacts[name]["kind"] == "store":
+            return self.store.has_object(self.run, unit.latest["outputs"][name]) if unit.latest else False
         repo, path = self.artifact_location(name, unit.ctx)
         tree = repo.worktrees().get(unit.branch) if unit.branch else None
         if tree is not None:
@@ -1042,17 +1062,14 @@ class Run:
         for branch in (unit.branch, self.parent_in(repo, unit.ctx.parent)):
             ref = repo.fresh(branch) if branch else None
             if ref:
-                if repo.read_file(ref, path) is not None or repo.names(ref, path):
-                    return True
-                # a run artifact the run's end removed still counts as written (D38)
-                return self.w.artifacts[name].get("keep") == "run" and repo.removed_at(ref, path) is not None
+                return repo.read_file(ref, path) is not None or bool(repo.names(ref, path))
         return False
 
     def missing_inputs(self, unit: Unit) -> dict | None:
         for name in unit.step.get("inputs", []):
             if name == "unit" or name.startswith("unit."):
                 continue
-            if self.w.artifacts[name]["kind"] != "file":
+            if self.w.artifacts[name]["kind"] not in ("file", "store"):
                 continue
             _, problem = self.read_artifact(name, unit.ctx, parse=False)
             if problem:

@@ -41,7 +41,7 @@ def test_apply_starts_a_run_and_a_second_apply_changes_nothing(story):
 def spec_done(f, tasks=ONE_TASK, spec=SPEC):
     f.run("apply", "412")
     h = handouts(f.run("next", "412"))["spec"]
-    files = {("home", "specs/412.md"): spec, ("home", "work/412/tasks.yaml"): tasks}
+    files = {("home", "specs/412.md"): spec, ("out", "tasks.yaml"): tasks}
     finish(f, "412", h, start_work(f, h), files, {"summary": "Wrote the spec."})
 
 
@@ -120,9 +120,8 @@ def test_the_end_of_a_run(story):
     res = story.run("apply", "412")
     ended = [(a["unit"], a.get("action"), a.get("did")) for a in res["applied"] if a["unit"].startswith("onEnd")]
     assert ended == [
-        ("onEnd-2", "git.remove-run-artifacts", "removed home:work/412/tasks.yaml"),
-        ("onEnd-3", "pr.ready", "marked acme/shop#1 ready; opened acme/shop-api#2"),
-        ("onEnd-4", "tracker.close", "closed"),
+        ("onEnd-2", "pr.ready", "marked acme/shop#1 ready; opened acme/shop-api#2"),
+        ("onEnd-3", "tracker.close", "closed"),
     ]
     assert res["kind"] == "waiting" and states(res)["implement-T1"] == ("done", None)
     assert actions(res)["onEnd-1"] == ("git.sync-base", "done", None)

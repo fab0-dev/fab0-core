@@ -156,7 +156,7 @@ def test_a_command_end_line_gives_the_exit_code(factory):
     f = factory("docs").init_git(DOCS_GH)
     start_docs(f)
     brief = handouts(f.run("next", "docs-1"))["brief"]
-    files = {("home", "briefs/docs-1.md"): BRIEF, ("home", "work/docs-1/pages.json"): PAGES}
+    files = {("home", "briefs/docs-1.md"): BRIEF, ("out", "pages.json"): PAGES}
     finish(f, "docs-1", brief, start_work(f, brief), files, {"summary": "Planned."})
     f.merge("home", "docs/docs-1--brief", "docs/docs-1")
     write = handouts(f.run("next", "docs-1"))["write-intro"]

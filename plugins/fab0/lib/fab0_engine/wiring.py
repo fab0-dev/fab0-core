@@ -27,10 +27,24 @@ LEDGER_HINT = (
     "fab0 0.7 keeps the ledger in a run store, not in the product repositories: replace ledger with "
     "store: {github: <owner>/<runs repository>}"
 )
+KEEP_HINT = (
+    "keep is gone in fab0 0.7: what a run produces for itself goes into the run store. Use kind: store with "
+    "store: {format: <format>} for a working file such as a task list, or keep kind: file without keep for a "
+    "file the product keeps"
+)
+REMOVED_ACTIONS = {
+    "git.remove-run-artifacts": "fab0 0.7 removes nothing at a run's end: a working file is kind: store, which "
+    "never reaches a product repository. Drop the action"
+}
 SCHEMA_1_HINT = (
     "this is schema 1, the fab0 0.5 wiring; this engine reads schema 2 (fab0 0.6). "
     "Rewrite .fab0/ for schema 2, or pin the plugin to fab0--v0.5.0"
 )
+
+
+def fmt_of(art: dict) -> str | None:
+    """The format of a file or store artifact."""
+    return (art.get("file") or art.get("store") or {}).get("format")
 
 
 def plugin_name(name: str) -> bool:
@@ -110,6 +124,9 @@ class Wiring:
             if path.suffix != ".yaml":
                 continue
             data = self._read(rel)
+            if kind == "artifact" and isinstance(data, dict) and "keep" in data:
+                self.error(f".fab0/{rel}", KEEP_HINT)
+                continue
             if data is None or self._validated(rel, data, kind) is None:
                 continue
             if data[kind] != path.stem:
@@ -186,7 +203,7 @@ class Wiring:
             self._check_repo(where, "file.repo", art["file"]["repo"])
         if kind == "issue" and not self.has_tracker:
             self.error(where, "kind issue needs a tracker in fab0.yaml")
-        fmt = art.get("file", {}).get("format")
+        fmt = fmt_of(art)
         if "schema" in art:
             if fmt not in LISTABLE:
                 self.error(where, "schema: only yaml and json files have a schema")
@@ -212,7 +229,9 @@ class Wiring:
             self.error(where, f"{field}: no class '{model}' in models.{HARNESS}")
 
     def check_action(self, where: str, field: str, name: str) -> None:
-        if name not in ACTIONS:
+        if name in REMOVED_ACTIONS:
+            self.error(where, f"{field}: {REMOVED_ACTIONS[name]}")
+        elif name not in ACTIONS:
             self.error(where, f"{field}: no action '{name}' in fab0's catalogue")
         elif name.startswith("tracker.") and not self.has_tracker:
             self.error(where, f"{field}: '{name}' needs a tracker in fab0.yaml")
@@ -472,8 +491,8 @@ class Pipeline:
         if art is None:
             self.error(f"{at}: foreach: no artifact '{name}'")
         else:
-            if art.get("file", {}).get("format") not in LISTABLE:
-                self.error(f"{at}: foreach needs a yaml or json file")
+            if fmt_of(art) not in LISTABLE:
+                self.error(f"{at}: foreach needs a yaml or json file or store artifact")
             if name not in available and self._written_later(name):
                 self.error(f"{at}: foreach reads '{name}' before a step writes it")
         return self._walk(node["steps"], f"{at}.steps", set(available), True, None)
@@ -574,9 +593,9 @@ class Pipeline:
             art = self.w.artifacts.get(name)
             if art is None:
                 self.error(f"{at}: no artifact '{name}'")
-            elif art["kind"] != "file":
-                self.error(f"{at}: conditions read file artifacts only, and '{name}' is {art['kind']}")
-            elif "section" in cond and art.get("file", {}).get("format") != "markdown":
+            elif art["kind"] not in ("file", "store"):
+                self.error(f"{at}: conditions read file and store artifacts only, and '{name}' is {art['kind']}")
+            elif "section" in cond and fmt_of(art) != "markdown":
                 self.error(f"{at}: section needs a markdown file, and '{name}' isn't one")
         if "verdict" in cond and cond["verdict"] not in self.gated:
             self.error(f"{at}: verdict: '{cond['verdict']}' is no earlier step with an auto gate")

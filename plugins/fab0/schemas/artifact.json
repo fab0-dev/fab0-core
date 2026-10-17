@@ -1,13 +1,13 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "fab0 artifact (.fab0/artifacts/<name>.yaml), schema 2",
-  "description": "A piece of state that steps pass on. Its kind says where it lives and how it is hashed for staleness. fab0 prescribes no formats: a factory chooses them, and may point to its own schema.",
+  "description": "A piece of state that steps pass on. Its kind says where it lives and how it is hashed for staleness: a product repository (`file`), the run store (`store`), the tracker (`issue`, `pr`) or a tool. fab0 prescribes no formats: a factory chooses them, and may point to its own schema.",
   "type": "object",
   "required": ["artifact", "kind"],
   "additionalProperties": false,
   "properties": {
     "artifact": {"$ref": "#/$defs/name"},
-    "kind": {"enum": ["file", "issue", "pr", "tool", "none"]},
+    "kind": {"enum": ["file", "store", "issue", "pr", "tool", "none"]},
     "file": {
       "description": "A file or directory in a repository. `{run}` and `{unit}` fill the path.",
       "type": "object",
@@ -20,6 +20,19 @@
           "description": "The engine parses `yaml` and `json`, and reads sections of `markdown`. Any other value is opaque.",
           "type": "string",
           "minLength": 1
+        }
+      }
+    },
+    "store": {
+      "description": "A file a run produces for itself, kept in the run store, never in a product repository: one immutable object per version, named by its hash. The step writes it in its outbox.",
+      "type": "object",
+      "required": ["format"],
+      "additionalProperties": false,
+      "properties": {
+        "format": {
+          "description": "The engine parses `yaml` and `json`, and reads sections of `markdown`. Any other value is opaque. It also names the object's extension (`markdown` is `.md`, `text` is `.txt`).",
+          "type": "string",
+          "pattern": "^[a-z0-9]+$"
         }
       }
     },
@@ -51,7 +64,7 @@
       "properties": {"name": {"type": "string", "pattern": "^[A-Za-z0-9_.:-]+$"}, "with": {"type": "object"}}
     },
     "schema": {
-      "description": "A project-relative JSON Schema, for `yaml` and `json` files.",
+      "description": "A project-relative JSON Schema, for `yaml` and `json` files and store artifacts.",
       "type": "string",
       "minLength": 1
     },
@@ -92,10 +105,6 @@
           }
         ]
       }
-    },
-    "keep": {
-      "description": "`run`: removed from the result by `git.remove-run-artifacts`. `durable` (default): kept.",
-      "enum": ["run", "durable"]
     }
   },
   "allOf": [
@@ -103,28 +112,35 @@
       "if": {"properties": {"kind": {"const": "file"}}},
       "then": {
         "required": ["file"],
-        "not": {"anyOf": [{"required": ["issue"]}, {"required": ["pr"]}, {"required": ["tool"]}]}
+        "not": {"anyOf": [{"required": ["store"]}, {"required": ["issue"]}, {"required": ["pr"]}, {"required": ["tool"]}]}
+      }
+    },
+    {
+      "if": {"properties": {"kind": {"const": "store"}}},
+      "then": {
+        "required": ["store"],
+        "not": {"anyOf": [{"required": ["file"]}, {"required": ["issue"]}, {"required": ["pr"]}, {"required": ["tool"]}]}
       }
     },
     {
       "if": {"properties": {"kind": {"const": "issue"}}},
       "then": {
         "required": ["issue"],
-        "not": {"anyOf": [{"required": ["file"]}, {"required": ["pr"]}, {"required": ["tool"]}, {"required": ["keep"]}]}
+        "not": {"anyOf": [{"required": ["file"]}, {"required": ["store"]}, {"required": ["pr"]}, {"required": ["tool"]}]}
       }
     },
     {
       "if": {"properties": {"kind": {"const": "pr"}}},
       "then": {
         "required": ["pr"],
-        "not": {"anyOf": [{"required": ["file"]}, {"required": ["issue"]}, {"required": ["tool"]}, {"required": ["keep"]}]}
+        "not": {"anyOf": [{"required": ["file"]}, {"required": ["store"]}, {"required": ["issue"]}, {"required": ["tool"]}]}
       }
     },
     {
       "if": {"properties": {"kind": {"const": "tool"}}},
       "then": {
         "required": ["tool"],
-        "not": {"anyOf": [{"required": ["file"]}, {"required": ["issue"]}, {"required": ["pr"]}, {"required": ["keep"]}]}
+        "not": {"anyOf": [{"required": ["file"]}, {"required": ["store"]}, {"required": ["issue"]}, {"required": ["pr"]}]}
       }
     },
     {
@@ -133,12 +149,12 @@
         "not": {
           "anyOf": [
             {"required": ["file"]},
+            {"required": ["store"]},
             {"required": ["issue"]},
             {"required": ["pr"]},
             {"required": ["tool"]},
             {"required": ["schema"]},
             {"required": ["verify"]},
-            {"required": ["keep"]},
             {"required": ["elements"]}
           ]
         }
