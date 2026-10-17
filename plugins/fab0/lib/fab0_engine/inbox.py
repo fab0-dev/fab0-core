@@ -9,7 +9,7 @@ Each is evaluated like `status`, and its units are sorted for the person asking:
 - `yours`: a unit that waits on a role the person has: a human gate, questions, an escalation, or the run's
   own pull request;
 - `ready`: work anyone may start with `/fab0:run`: ready units and actions, auto gates to run, merges;
-- `waiting`: units that wait on someone else;
+- `waiting`: units that wait on someone else, and units another checkout claimed (D81);
 - `blocked`: units held back by a signal a person may need to act on (the tracker, an invalid dependency, a
   failure, another run's claim, an undecidable condition). Units that only wait their turn (order, data,
   claim, limit) aren't listed.
@@ -113,16 +113,20 @@ def inbox(wiring, tracker, user: str, pick) -> dict:
             entry = {"run": run_id, "unit": run.run_branch, "reason": result["reason"], "owner": owner}
             lists["yours" if owner in roles else "waiting"].append(entry)
             continue
+        elsewhere = [u for u in run.units if (u.reason or {}).get("claimed") == "elsewhere"]
         ready = [
             u.id
             for u in run.units
             if u.state in ("ready", "running")
             and u.step
+            and u not in elsewhere
             or u.state == "waiting"
             and (u.reason or {}).get("gate") in ("merge", "gate", "running")
         ]
         if ready:
             lists["ready"].append({"run": run_id, "pipeline": name, "units": ready, "command": f"/fab0:run {run_id}"})
+        for unit in elsewhere:  # another checkout took it (D81): it is under way, on someone else's machine
+            lists["waiting"].append({"run": run_id, "unit": unit.id, "reason": unit.reason, "owner": None})
         for unit in run.units:
             reason = unit.reason or {}
             if unit.state == "waiting" and reason.get("gate") not in ("merge", "gate", "running"):

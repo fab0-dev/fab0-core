@@ -1,11 +1,11 @@
 ---
 name: github
-description: Set up GitHub for a fab0 project, and the rules for GitHub writes. Use it when a project is wired for the first time, when `fab0-resolve apply` fails on GitHub (a missing label, issue type, board field or scope), or before any gh write outside `apply`.
+description: Set up GitHub for a fab0 project, and the rules for GitHub writes. Use it when a project is wired for the first time, when `fab0-resolve apply` fails on GitHub (a missing label, issue type, board field or scope), when `fab0-resolve validate` can't reach the runs repository, or before any gh write outside `apply`.
 ---
 
 # GitHub for fab0
 
-`fab0-resolve apply` makes every GitHub write a run needs: branches, pull requests, merges within the merge policy, labels, assignees, comments, sub-issues, blocked-by relations and board fields. It uses the person's own `gh` login. This skill covers what `apply` can't do: preparing the repositories, the organisation and the board, once.
+`fab0-resolve apply` makes every GitHub write a run needs: branches, pull requests, merges within the merge policy, labels, assignees, comments, sub-issues, blocked-by relations and board fields. It uses the person's own `gh` login. This skill covers what `apply` can't do: preparing the repositories, the runs repository, the organisation and the board, once.
 
 ## Rules
 
@@ -15,7 +15,7 @@ description: Set up GitHub for a fab0 project, and the rules for GitHub writes. 
 
 ## Setup
 
-Collect from `.fab0/`: the labels and issue types in pipeline triggers, `tracker.label` actions, `tracker.child.sync` types and `human: {via: label}` gates; the board and field names in `fab0.yaml` `tracker`. Then check each of these, and fix what is missing.
+Collect from `.fab0/`: the labels and issue types in pipeline triggers, `tracker.label` actions, `tracker.child.sync` types and `human: {via: label}` gates; the board and field names in `fab0.yaml` `tracker`; the runs repository in `fab0.yaml` `store.github`, and the logins in `people`. Then check each of these, and fix what is missing.
 
 1. **Login.** `gh auth status` shows the scopes. A board needs `project`: `gh auth refresh -s project`.
 2. **Labels**, in the home repo:
@@ -36,5 +36,35 @@ Collect from `.fab0/`: the labels and issue types in pipeline triggers, `tracker
    - fab0 never writes Status: the board's built-in workflows own it.
 5. **The base branch.** Protect it with a ruleset that requires a pull request, so a run reaches it only through its run pull request. Run branches (`fab0/<run>/base`) stay unprotected, so `apply` can merge units into them.
 6. **Sub-issues and blocked-by relations** need nothing beyond the repository's issues being on. The engine reads them on every call and treats them as dependencies.
+7. **The runs repository** (`store.github`) holds what runs produce for themselves: each run's ledger, its store artifacts, and the review pull requests of units whose outputs are all in the store. The engine pushes to its `main` directly, with each person's own login, and never force-pushes. Several factories of one product share it, each under its own `store.project`, so it may exist already.
+   - **Check** that it exists and is private, that its ruleset is in place, and who can write:
+     ```bash
+     gh repo view OWNER/RUNS --json visibility,defaultBranchRef
+     ```
+     ```bash
+     gh api repos/OWNER/RUNS/rulesets --jq '.[].name'
+     ```
+     ```bash
+     gh api repos/OWNER/RUNS/collaborators --jq '.[] | select(.permissions.push) | .login'
+     ```
+   - **Create it only when the person asks.** Say first what you will create, then:
+     ```bash
+     gh repo create OWNER/RUNS --private --description "fab0 run store"
+     ```
+     An empty repository is fine: the first record starts `main`.
+   - **The ruleset** blocks force pushes to `main` and its deletion, so the store's history stays append-only. It requires no pull request and no checks, since the engine writes `main` directly. Write it to a file, then:
+     ```json
+     {"name": "fab0 run store", "target": "branch", "enforcement": "active",
+      "conditions": {"ref_name": {"include": ["refs/heads/main"], "exclude": []}},
+      "rules": [{"type": "deletion"}, {"type": "non_fast_forward"}]}
+     ```
+     ```bash
+     gh api repos/OWNER/RUNS/rulesets -X POST --input ruleset.json
+     ```
+   - **Write access** for everyone in `people`, who records runs and merges review pull requests: a team the organisation already has, or each login.
+     ```bash
+     gh api -X PUT repos/OWNER/RUNS/collaborators/LOGIN -f permission=push
+     ```
+   - Then `fab0-resolve validate`: it fails when the runs repository can't be reached.
 
 Report what was missing, what you created, and what a person (an organisation owner) still has to do.

@@ -117,6 +117,26 @@ class GitStore:
             return []
         return sorted(d.name for d in folder.iterdir() if any((d / "ledger").glob("*.yaml")))
 
+    def unreachable(self) -> str | None:
+        """Why the runs repository can't be read, or None when it can: through the clone's remote, else the URL. A
+        store with no remote is local, and a missing checkout is started on the first write."""
+        env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}  # a credential prompt would hang `validate`
+        if (self.path / ".git").exists():
+            if not self._has_remote():
+                return None
+            args = ["git", "-C", str(self.path), "ls-remote", "origin", "HEAD"]
+        elif self.url:
+            args = ["git", "ls-remote", self.url, "HEAD"]
+        elif self.path.exists() and any(self.path.iterdir()):
+            return f"{self.path} is there and isn't a git repository"
+        else:
+            return None
+        try:
+            done = subprocess.run(args, capture_output=True, text=True, env=env, timeout=60)
+        except subprocess.TimeoutExpired:
+            return "git ls-remote took longer than a minute"
+        return None if done.returncode == 0 else (done.stderr.strip().splitlines() or ["git ls-remote failed"])[-1]
+
     # ------------------------------------------------------------ review branches
 
     def review_branch(self, run: str, unit: str) -> str:

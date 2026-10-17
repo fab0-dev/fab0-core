@@ -87,6 +87,16 @@ def cmd_version(args) -> dict:
 def cmd_validate(args) -> dict:
     wiring = load_wiring(args)
     repos = wiring.project["repos"]
+    store = open_store(wiring.project, wiring.root)
+    why = store.unreachable()
+    cfg = wiring.project["store"]
+    where = cfg.get("github") or str(store.path)
+    if why:
+        message = (
+            f"store: the runs repository {where} can't be reached ({why}). Create it, or get access to it, with the "
+            "fab0:github skill"
+        )
+        raise Fail(EXIT_INVALID, "invalid wiring", errors=[{"file": ".fab0/fab0.yaml", "message": message}])
     return {
         "ok": True,
         "project": str(wiring.root),
@@ -94,6 +104,7 @@ def cmd_validate(args) -> dict:
         "pipelines": wiring.project["pipelines"],
         "steps": sorted(wiring.steps),
         "artifacts": sorted(wiring.artifacts),
+        "store": {"runs": where, "project": store.project, "path": str(store.path)},
         "workspace": {
             name: {"path": str((wiring.root / cfg["path"]).resolve()), "present": (wiring.root / cfg["path"]).is_dir()}
             for name, cfg in repos.items()

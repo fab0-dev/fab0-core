@@ -1,7 +1,7 @@
 """fab0-resolve validate: schema 2 wiring is checked across files, and schema 1 is refused."""
 
 import pytest
-from conftest import FACTORIES
+from conftest import FACTORIES, git
 
 
 @pytest.mark.parametrize("name", FACTORIES)
@@ -30,8 +30,10 @@ def test_schema_1_is_refused_with_a_hint(factory):
 
 
 def test_the_store_block(factory):
-    f = factory("story")
+    f = factory("story").init_git()
     f.edit("fab0.yaml", lambda d: d.update(store={"github": "acme/runs", "project": "shop"}))
+    assert "the runs repository acme/runs can't be reached" in messages(f), "no clone yet, and nothing on GitHub"
+    git(f.home.parent, "init", "-q", "--bare", "-b", "main", str(f.github() / "acme" / "runs.git"))
     assert f.run("validate")["ok"]
     f.edit("fab0.yaml", lambda d: d.update(store={"project": "shop"}))
     assert "store" in messages(f)
@@ -281,3 +283,26 @@ def test_merge_auto_inside_a_gated_block_targets_the_blocks_branch(factory):
     f.edit("pipelines/story.yaml", lambda d: d["steps"][0].update(gate="human"))
     f.edit("pipelines/story.yaml", lambda d: d["steps"][1].update(gate="human"))
     assert f.run("validate")["ok"]
+
+
+def test_validate_checks_that_the_run_store_is_reachable(story):
+    bare = story.store_path().parent / "runs.git"
+    git(story.store_path().parent, "init", "-q", "--bare", "-b", "main", str(bare))
+    git(story.store_path(), "remote", "add", "origin", str(bare))
+    res = story.run("validate")
+    assert res["store"] == {"runs": str(story.store_path()), "project": "shop", "path": str(story.store_path())}
+    bare.rename(bare.with_name("gone.git"))
+    res = story.run("validate", expect=3)
+    [error] = res["errors"]
+    assert error["message"].startswith(f"store: the runs repository {story.store_path()} can't be reached (")
+    assert error["message"].endswith("with the fab0:github skill")
+
+
+def test_a_store_with_no_checkout_yet_is_started_on_the_first_write(factory):
+    f = factory("story")  # no git repositories at all: the store's folder isn't there either
+    assert not f.store_path().exists()
+    assert f.run("validate")["ok"]
+    f.store_path().mkdir()
+    (f.store_path() / "notes.txt").write_text("not a store")
+    res = f.run("validate", expect=3)
+    assert "isn't a git repository" in res["errors"][0]["message"]

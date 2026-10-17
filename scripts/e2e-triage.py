@@ -84,6 +84,9 @@ class Check:
             "--strict-mcp-config",
             "--setting-sources",
             "project,local",
+            # the engine under test first on PATH: an installed fab0 plugin's bin would come before --plugin-dir's
+            "--settings",
+            json.dumps({"env": {"PATH": f"{PLUGIN / 'bin'}{os.pathsep}{os.environ['PATH']}"}}),
             "--model",
             self.model,
             "--dangerously-skip-permissions",
@@ -118,6 +121,17 @@ class Check:
     def calls(self) -> list[dict]:
         return [json.loads(line) for line in self.log.read_text().splitlines()] if self.log.exists() else []
 
+    def empty_commits(self) -> list[str]:
+        """Commits on any branch of the product repository that change nothing (MIGRATION M4)."""
+        found = []
+        for line in git(self.home, "rev-list", "--all", "--parents").splitlines():
+            commit, *parents = line.split()
+            if len(parents) == 1 and git(self.home, "rev-parse", f"{commit}^{{tree}}") == git(
+                self.home, "rev-parse", f"{parents[0]}^{{tree}}"
+            ):
+                found.append(git(self.home, "log", "-1", "--format=%s", commit))
+        return found
+
     def expect(self, ok: bool, what: str) -> None:
         print(("  ok    " if ok else "  FAIL  ") + what, flush=True)
         if not ok:
@@ -142,6 +156,8 @@ class Check:
         self.expect("runs/support/7/ledger/classify-1.yaml" in ledger, "the run store is pushed with the entries")
         product = git(self.home, "log", "--all", "--name-only", "--format=")
         self.expect("ledger" not in product, "no ledger file in the product repository")
+        self.expect("runs/support/7/ledger/classify-1-claim.yaml" in ledger, "classify was claimed in the run store")
+        self.expect(self.empty_commits() == [], f"no empty commit in the product repository ({self.empty_commits()})")
 
         data = json.loads(self.gh.read_text())
         data["issues"]["acme/support#7"]["labels"].append("acknowledged")
