@@ -14,10 +14,10 @@
         "source": "git-subdir",
         "url": "fab0-dev/fab0-core",
         "path": "plugins/fab0",
-        "ref": "fab0--v0.7.0"
+        "ref": "fab0--v0.7.1"
       },
       "description": "fab0 core: the engine that executes, validates and connects YAML pipelines (fab0-resolve), and the /fab0:run, /fab0:inbox and github skills",
-      "version": "0.7.0",
+      "version": "0.7.1",
       "license": "Apache-2.0"
     }
   ]
