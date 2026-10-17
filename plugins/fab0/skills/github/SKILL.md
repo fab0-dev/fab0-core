@@ -37,7 +37,7 @@ Collect from `.fab0/`: the labels and issue types in pipeline triggers, `tracker
 5. **The base branch.** Protect it with a ruleset that requires a pull request, so a run reaches it only through its run pull request. Run branches (`fab0/<run>/base`) stay unprotected, so `apply` can merge units into them.
 6. **Sub-issues and blocked-by relations** need nothing beyond the repository's issues being on. The engine reads them on every call and treats them as dependencies.
 7. **The runs repository** (`store.github`) holds what runs produce for themselves: each run's ledger, its store artifacts, and the review pull requests of units whose outputs are all in the store. The engine pushes to its `main` directly, with each person's own login, and never force-pushes. Several factories of one product share it, each under its own `store.project`, so it may exist already.
-   - **Check** that it exists and is private, that its ruleset is in place, and who can write:
+   - **Check** that it exists, its visibility, that its ruleset is in place, and who can write:
      ```bash
      gh repo view OWNER/RUNS --json visibility,defaultBranchRef
      ```
@@ -51,6 +51,7 @@ Collect from `.fab0/`: the labels and issue types in pipeline triggers, `tracker
      ```bash
      gh repo create OWNER/RUNS --private --description "fab0 run store"
      ```
+     Private keeps the runs' specs and records to the project's people, but GitHub allows a ruleset on a private repository only on a paid plan. On a free plan, ask the person: a public repository with the ruleset (the right choice when the product repositories are public already, since the runs hold nothing more), or a private one without it, which leaves `main` open to a person's force push.
      An empty repository is fine: the first record starts `main`.
    - **The ruleset** blocks force pushes to `main` and its deletion, so the store's history stays append-only. It requires no pull request and no checks, since the engine writes `main` directly. Write it to a file, then:
      ```json
