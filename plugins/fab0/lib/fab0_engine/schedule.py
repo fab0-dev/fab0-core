@@ -12,14 +12,16 @@ gives every unit a state:
   is missing), `claim` (an earlier unit claims overlapping paths), `limit` (too many units at once),
   `tracker` (an item the tracker says comes first is open), `invalid-dependency`, `condition` (a `when`
   can't be decided yet), `failed` (a command exited non-zero), or `start` (the run hasn't started).
-- `done`: its ledger entry is on the branch it merges into; for an action, its check passes.
+- `done`: the commits its latest attempt recorded are in the branch it merges into; an attempt that committed
+  nothing is done when its gate passes; for an action, its check passes.
 
 Actions (the pipeline's and its blocks' `onStart` and `onEnd`, and action steps) are units too. An action is
 done when its check passes: its result is a fact in git or the tracker, so it writes no ledger entry (D37).
 
 Branches (D10, D14): in `run` branching every unit works on its own branch and merges into its parent: the
 run branch, or the branch of the gated block around it. In `flat` branching the parent is the base branch.
-A pipeline whose steps write no files keeps its ledger on `ledger.branch` (D18), and its units work there.
+A unit that writes no repository still works on a branch of the home repo, to read its parent's state there.
+Every unit's ledger is in the run store (D74).
 
 The tracker's relations are dependencies too (P11, D49). A foreach element's item is the sub-issue
 `tracker.child.sync` made for it; once it exists, its blocked-by relations replace the element's `after`.
@@ -50,7 +52,9 @@ from .artifacts import input_hashes
 from .claims import EVERYTHING, overlap
 from .git import Repo
 from .hashing import sha_json
-from .ledger import DEFAULT_PATH, attempts, entry_name, gate_attempts, parse, seconds_between, took
+from .ledger import ATTEMPT, attempts, entry_name, gate_attempts, seconds_between, took
+from .ledger import check as check_entry
+from .store import open_store
 from .templates import Unresolved
 from .tracker import MAX_IN_FLIGHT
 from .wiring import EXECUTORS, Wiring, base_allowed
@@ -78,7 +82,7 @@ class Unit:
     state: str = "blocked"
     reason: dict | None = None
     branch: str | None = None
-    ledger_repo: str = "home"
+    pr_repo: str = "home"  # where its pull request is: the first repository it writes
     write: list[str] = field(default_factory=list)
     claims: dict = field(default_factory=dict)
     latest: dict | None = None
@@ -150,10 +154,8 @@ class Run:
         self.run_branch = (
             branches.get("run", "fab0/{run}/base").replace("{run}", run) if self.policy["branching"] == "run" else None
         )
-        ledger = project.get("ledger", {})
-        self.ledger_dir = ledger.get("path", DEFAULT_PATH).replace("{run}", run)
-        writes = any(wiring.writes_files(s) for s in self._steps(self.p["steps"]))
-        self.ledger_branch = None if writes else ledger.get("branch")
+        self.store = open_store(project, wiring.root)
+        self._facts: dict[str, dict] | None = None
         self.branch_parents: dict[str, str | None] = {self.run_branch: None} if self.run_branch else {}
         self.units: list[Unit] = []
         self._item: dict | None = None
@@ -221,19 +223,16 @@ class Run:
                 invalid = f"blocked by {ref}, closed as not planned"
         return after, open_, invalid
 
+    def facts(self) -> dict[str, dict]:
+        """The run's ledger, from the local checkout of the store, each fact checked: read once per evaluation."""
+        if self._facts is None:
+            found = self.store.facts(self.run) if self.store else {}
+            self._facts = {n: check_entry(f, f"{self.run}/{n}") for n, f in found.items()}
+        return self._facts
+
     def recorded(self) -> bool:
-        """The run has a ledger entry somewhere: on its run branch, its ledger branch or a unit branch."""
-        unit_prefix = self.unit_template.replace("{run}", self.run).split("{unit}")[0]
-        for repo in self.repos.values():
-            if not repo.exists():
-                continue
-            refs = repo.out("for-each-ref", "--format=%(refname:short)", "refs/heads", "refs/remotes/origin")
-            for ref in refs.splitlines():
-                branch = ref.removeprefix("origin/")
-                if branch in (self.run_branch, self.ledger_branch) or branch.startswith(unit_prefix):
-                    if any(n.endswith(".yaml") for n in repo.names(ref, self.ledger_dir)):
-                        return True
-        return False
+        """The run has a ledger entry."""
+        return bool(self.facts())
 
     def pending_dir(self) -> Path:
         return self.home.common_dir() / "fab0" / "pending" / self.run  # shared by every checkout of home
@@ -399,8 +398,8 @@ class Run:
         if not children_done:
             block.state, block.reason = "open", None
             return False
-        on_parent = all(self.on_branch(u, ctx.parent) for u in children)
-        if on_parent:
+        committed = [u for u in children if (u.latest or {}).get("heads")]
+        if committed and all(self.reached(u, ctx.parent) for u in committed):
             block.state, block.reason = "done", None
             return True
         block.state = "waiting"
@@ -415,6 +414,9 @@ class Run:
             block.reason = {"gate": self.gate_running(block)}
         elif latest["gate"]["decision"] == "approve":
             block.attempt = max(block.gates)
+            if not committed:  # nothing to merge: the gate is the decision
+                block.state, block.reason = "done", None
+                return True
             block.reason = {"gate": "merge" if gate.get("merge") == "auto" else "human"}
         else:  # a block isn't retried as a whole: which unit to redo is a person's call (D35)
             block.attempt = max(block.gates)
@@ -784,8 +786,8 @@ class Run:
         except Unresolved as exc:
             unit.reason = {"data": f"{{{exc}}} has no value"}
             return False
-        unit.ledger_repo = unit.write[0] if unit.write else "home"
-        unit.branch = None if self.ledger_branch else self.branch_name(uid)
+        unit.pr_repo = unit.write[0] if unit.write else "home"
+        unit.branch = self.branch_name(uid)
         unit.claims = self.claims(step, ctx, unit.write)
         if not reachable:
             unit.reason = reason
@@ -812,67 +814,47 @@ class Run:
             ]
         return {repo: globs for repo in write}
 
-    def target(self, unit: Unit) -> str:
-        """The branch the unit's ledger entry must reach for it to be done."""
-        repo = self.repos[unit.ledger_repo]
-        return self.ledger_branch or self.parent_in(repo, unit.ctx.parent)
-
-    def sources(self, unit: Unit) -> list[tuple[str, object]]:
-        """Where its entries may be, freshest first: the checkout of its branch, its branch, its target."""
-        repo = self.repos[unit.ledger_repo]
-        own = self.ledger_branch or unit.branch
-        out = []
-        tree = repo.worktrees().get(own)
-        if tree is not None:
-            out.append(("worktree", tree))
-        for branch in (own, self.target(unit)):
-            ref = repo.fresh(branch)
-            if ref:
-                out.append(("ref", ref))
-        return out
-
     def load_latest(self, unit: Unit) -> None:
-        repo = self.repos[unit.ledger_repo]
-        names: dict[str, tuple] = {}
-        for kind, where in reversed(self.sources(unit)):
-            if kind == "worktree":
-                listed = {p.name for p in (where / self.ledger_dir).glob("*.yaml")}
-            else:
-                listed = repo.names(where, self.ledger_dir)
-            for n in listed:
-                names[n] = (kind, where)
-        for n in gate_attempts(set(names), unit.id):
-            name = entry_name(unit.id, n, gate=True)
-            kind, where = names[name]
-            unit.gates[n] = parse(self._read_entry(repo, kind, where, name), f"{repo.name}:{self.ledger_dir}/{name}")
-        found = attempts(set(names), unit.id)
+        facts = self.facts()
+        for n in gate_attempts(facts, unit.id):
+            unit.gates[n] = facts[entry_name(unit.id, n, gate=True)]
+        found = attempts(facts, unit.id)
         if not found:
             unit.attempt = 1
             return
         unit.attempt = found[-1]
-        for n in found:
-            name = entry_name(unit.id, n)
-            kind, where = names[name]
-            unit.history.append(
-                parse(self._read_entry(repo, kind, where, name), f"{repo.name}:{self.ledger_dir}/{name}")
-            )
+        unit.history = [facts[entry_name(unit.id, n)] for n in found]
         unit.latest = unit.history[-1]
-
-    def _read_entry(self, repo: Repo, kind: str, where, name: str) -> bytes:
-        if kind == "worktree":
-            return (where / self.ledger_dir / name).read_bytes()
-        return repo.read_file(where, f"{self.ledger_dir}/{name}")
 
     def gate_running(self, unit: Unit) -> str:
         """`running` while a gate hand-out waits for its record, else `gate`: one is due."""
         return "running" if (self.pending_dir() / f"{unit.id}-gate.json").is_file() else "gate"
 
-    def on_branch(self, unit: Unit, branch: str | None) -> bool:
-        if not unit.latest:
+    def reached(self, unit: Unit, branch: str | None) -> bool:
+        """The commits the unit's latest attempt recorded are in `branch`, in every repository it committed to.
+        False when it committed nothing: then its gate decides (D34)."""
+        heads = (unit.latest or {}).get("heads") or {}
+        if not heads:
             return False
-        repo = self.repos[unit.ledger_repo]
-        ref = repo.fresh(self.ledger_branch or self.parent_in(repo, branch))
-        return bool(ref) and entry_name(unit.id, unit.attempt) in repo.names(ref, self.ledger_dir)
+        for name, sha in heads.items():
+            repo = self.repos[name]
+            ref = repo.fresh(self.parent_in(repo, branch))
+            if not ref or not repo.ref_exists(sha) or not repo.is_ancestor(sha, ref):
+                return False
+        return True
+
+    def pull_merged(self, unit: Unit) -> bool:
+        """GitHub reports the unit's pull request merged at the commits its latest attempt recorded, in every
+        repository it committed to, though they aren't in its parent: a person squashed or rebased it."""
+        heads = (unit.latest or {}).get("heads") or {}
+        if not heads or not unit.branch or self.tracker is None:
+            return False
+        for name in heads:
+            repo = self.repos[name]
+            pr = self.tracker.pull(repo.github, unit.branch, self.parent_in(repo, unit.ctx.parent))
+            if pr is None or pr["state"] != "merged" or pr.get("head") != heads[name]:
+                return False
+        return True
 
     def gate_kind(self, gate) -> str:
         if isinstance(gate, str):
@@ -914,7 +896,7 @@ class Run:
 
     def gated_state(self, unit: Unit, entry: dict) -> None:
         """A recorded attempt that stands: its failure, its questions, or where its gate is."""
-        if self.ledger_branch is None and self.on_branch(unit, unit.ctx.parent):
+        if self.reached(unit, unit.ctx.parent):
             unit.state, unit.reason = "done", None  # merged: whoever merged it decided
             return
         if entry.get("exit", 0) != 0:
@@ -950,10 +932,12 @@ class Run:
                 unit.state, unit.reason = "waiting", {"escalated": "the gate escalated"}
                 return
         labelled = self.labelled(unit)
-        if self.ledger_branch is not None:  # nothing to merge: the gate is the decision
+        if not entry.get("heads"):  # nothing to merge: the gate is the decision
             human = (unit.gate == "human" or isinstance(unit.gate, dict) and "human" in unit.gate) and not labelled
-            done = self.on_branch(unit, None) and not human
-            unit.state, unit.reason = ("done", None) if done else ("waiting", {"gate": "human" if human else "merge"})
+            unit.state, unit.reason = ("waiting", {"gate": "human"}) if human else ("done", None)
+            return
+        if self.pull_merged(unit):
+            unit.state, unit.reason = "done", None  # a person squashed or rebased it: the merge decided
             return
         merge = (
             "merge"
@@ -1002,7 +986,7 @@ class Run:
     def conflicts(self, unit: Unit) -> dict[str, list[str]]:
         """Per repository, the files a unit's branch would conflict on when merged into its parent."""
         found = {}
-        for name in dict.fromkeys(unit.write or [unit.ledger_repo]):
+        for name in dict.fromkeys(unit.write or [unit.pr_repo]):
             repo = self.repos[name]
             base, head = repo.fresh(self.parent_in(repo, unit.ctx.parent)), repo.fresh(unit.branch)
             if base and head and not repo.is_ancestor(head, base):
@@ -1021,7 +1005,7 @@ class Run:
                     return f"{repo.github}#{pr['number']}", failed
             return None
 
-        names = dict.fromkeys(unit.write or [unit.ledger_repo])  # one repository's checks don't wait on another's
+        names = dict.fromkeys(unit.write or [unit.pr_repo])  # one repository's checks don't wait on another's
         return dict(f for f in self.gather([lambda n=n: failing(n) for n in names]) if f)
 
     def rework(self, unit: Unit, entry: dict) -> dict:
@@ -1034,7 +1018,7 @@ class Run:
         now = input_hashes(self, unit)
         before = entry.get("inputs", {})
         stale = sorted(k for k in now.keys() | before.keys() if now.get(k) != before.get(k))
-        if stale and self.ledger_branch is None and self.on_branch(unit, unit.ctx.parent):
+        if stale and (self.reached(unit, unit.ctx.parent) or self.pull_merged(unit)):
             # merged: its own pull request's reviews were the gate, and the merge decided (D34, D61)
             stale = [k for k in stale if not self.own_pull_input(k)]
         if stale:
@@ -1100,43 +1084,37 @@ class Run:
                     u.state, u.reason = "blocked", {"tracker": left}
 
     def other_claims(self) -> list[tuple[str, str, dict]]:
-        """The claims of other open runs: (run, unit, {repo: [globs]}) from the latest ledger entry on each of
-        their unit branches that isn't in its repository's base yet (D47)."""
-        unit_pattern = re.compile(
-            "^"
-            + re.escape(self.unit_template).replace(r"\{run\}", "(?P<run>[^/]+)").replace(r"\{unit\}", "(?P<unit>.+)")
-            + "$"
-        )
-        run_template = self.w.git_policy(self.p).get("branches", {}).get("run", "fab0/{run}/base")
-        ledger_path = self.w.project.get("ledger", {}).get("path", DEFAULT_PATH)
+        """The claims of other open runs: (run, unit, {repo: [globs]}) from the latest attempt of each of their
+        units whose commits aren't in their repository's base yet (D47), read from the run store."""
+        if self.store is None:
+            return []
         found = []
-        for repo in self.repos.values():
-            if not repo.exists():
+        for other in self.store.runs():
+            if other == self.run:
                 continue
-            base = repo.fresh(repo.base)
-            refs = repo.out("for-each-ref", "--format=%(refname:short)", "refs/heads", "refs/remotes/origin")
-            seen = set()
-            for ref in refs.splitlines():
-                branch = ref.removeprefix("origin/")
-                m = unit_pattern.match(branch)
-                if not m or m["run"] == self.run or branch in seen or branch == run_template.replace("{run}", m["run"]):
+            latest: dict[str, tuple[int, dict]] = {}
+            for name, fact in self.store.facts(other).items():
+                m = ATTEMPT.match(name)
+                if m and int(m["attempt"]) > latest.get(m["unit"], (0, None))[0]:
+                    latest[m["unit"]] = (int(m["attempt"]), fact)
+            for unit, (_, fact) in latest.items():
+                heads = (fact or {}).get("heads") or {}
+                if not heads or all(self.in_base(name, sha) for name, sha in heads.items()):
                     continue
-                seen.add(branch)
-                head = repo.fresh(branch)
-                if base and repo.is_ancestor(head, base):
-                    continue
-                folder = ledger_path.replace("{run}", m["run"])
-                entries = sorted(attempts(repo.names(head, folder), m["unit"]))
-                if not entries:
-                    continue
-                raw = repo.read_file(head, f"{folder}/{entry_name(m['unit'], entries[-1])}")
                 claims: dict[str, list[str]] = {}
-                for item in (parse(raw, branch).get("claims") or []) if raw else []:
+                for item in fact.get("claims") or []:
                     name, _, glob = item.partition(":")
                     claims.setdefault(name, []).append(glob)
                 if claims:
-                    found.append((m["run"], m["unit"], claims))
+                    found.append((other, unit, claims))
         return found
+
+    def in_base(self, name: str, sha: str) -> bool:
+        repo = self.repos.get(name)
+        if repo is None or not repo.exists():
+            return True  # a repository this project doesn't have can't conflict here
+        base = repo.fresh(repo.base)
+        return bool(base) and repo.ref_exists(sha) and repo.is_ancestor(sha, base)
 
     def apply_claims(self) -> None:
         policy = self.w.project.get("parallel", {}).get("cross_run", "warn")

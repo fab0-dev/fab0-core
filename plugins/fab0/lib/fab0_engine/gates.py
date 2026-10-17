@@ -1,20 +1,20 @@
 """Auto gates: the hand-out of a gate (an agent's verdict, or a command's exit code) and its record.
 
-A gate judges one attempt of a step, or a gated block's units as they are. Its ledger entry is
-`<unit>-<attempt>-gate.yaml`, beside the attempt it judged, so no entry is ever edited.
+A gate judges one attempt of a step, or a gated block's units as they are. Its ledger entry is the fact
+`<unit>-<attempt>-gate` in the run store, beside the attempt it judged, so no entry is ever edited. A command
+gate reads the attempt it judges at `{attempt}`, the path of that attempt's entry.
 """
 
 from __future__ import annotations
 
 import copy
 import json
-from pathlib import Path
 
 from .artifacts import tail, view
 from .errors import EXIT_REFUSED, EXIT_USAGE, Fail
-from .handout import end_line, start_line, worktree
-from .ledger import dump as dump_entry
-from .ledger import entry_name, now, parse, timing
+from .handout import end_line, push, start_line, worktree
+from .ledger import check as check_entry
+from .ledger import entry_name, now, timing
 from .schedule import Run, Unit
 from .schemas import core_schema, schema_errors
 from .templates import Unresolved, render
@@ -30,23 +30,17 @@ def gate_model(run: Run, unit: Unit) -> str:
 
 
 def changes(run: Run, unit: Unit) -> list[str]:
-    """How the reviewer sees what the unit changed: a diff per repository, without the ledger."""
+    """How the reviewer sees what the unit changed: a diff per repository."""
     lines = []
     if unit.step is None:
         repo = run.home
         parent = run.parent_in(repo, unit.ctx.parent)
-        lines.append(
-            f"- `git -C {repo.path} diff {repo.fresh(parent) or parent}...{unit.branch} -- . "
-            f"':(exclude){run.ledger_dir}'`"
-        )
+        lines.append(f"- `git -C {repo.path} diff {repo.fresh(parent) or parent}...{unit.branch}`")
         return lines
     for name in unit.write:
         repo = run.repos[name]
         parent = run.parent_in(repo, unit.ctx.parent)
-        lines.append(
-            f"- {name}: `git -C {repo.path} diff {repo.fresh(parent) or parent}...{unit.branch} -- . "
-            f"':(exclude){run.ledger_dir}'`"
-        )
+        lines.append(f"- {name}: `git -C {repo.path} diff {repo.fresh(parent) or parent}...{unit.branch}`")
     return lines or ["- It changed no files."]
 
 
@@ -94,7 +88,7 @@ def gate_brief(run: Run, unit: Unit, schema: dict) -> str:
     if unit.step and unit.branch:  # from R8: a reviewer switched branches in a person's checkout to run tests
         trees = [
             f"`{worktree(run, name, unit.branch, unit.id)}` ({name})"
-            for name in dict.fromkeys(unit.write or [unit.ledger_repo])
+            for name in dict.fromkeys(unit.write or [unit.pr_repo])
         ]
         lines += [
             "Its branch is checked out in " + ", ".join(trees) + ": run the project's checks there. Don't check out "
@@ -126,8 +120,9 @@ def gate_brief(run: Run, unit: Unit, schema: dict) -> str:
 
 def gate_handout(run: Run, unit: Unit) -> dict:
     auto = unit.auto
-    repo_name = unit.ledger_repo
-    branch = run.ledger_branch or unit.branch
+    repo_name = unit.pr_repo
+    branch = unit.branch
+    tree = worktree(run, repo_name, branch, unit.id if unit.step else unit.id + "-gate")
     out = {
         "unit": unit.id,
         "gate": True,
@@ -135,7 +130,7 @@ def gate_handout(run: Run, unit: Unit) -> dict:
         "executor": "agent" if "agent" in auto else "command",
         "repo": repo_name,
         "branch": branch,
-        "worktree": worktree(run, repo_name, branch, unit.id if unit.step else unit.id + "-gate"),
+        "worktree": tree,
         "merge": unit.gate.get("merge", "human"),
         "fab0_version": read_version(),
     }
@@ -145,8 +140,15 @@ def gate_handout(run: Run, unit: Unit) -> dict:
         out["return_schema"] = schema
         out["brief"] = gate_brief(run, unit, schema)
     else:
+        lookup = run.lookup(unit.ctx)
+        judged = str(run.store.fact_path(run.run, entry_name(unit.id, unit.attempt)))
+
+        def resolve(name: str):
+            return judged if name == "attempt" and unit.step else lookup(name)
+
         try:
-            out["command"] = render(auto["command"], run.lookup(unit.ctx))
+            out["command"] = render(auto["command"], resolve)
+            out["attempt_path"] = judged
         except Unresolved as exc:
             raise Fail(EXIT_REFUSED, f"{unit.id}: {{{exc}}} has no value yet") from None
     out["line"] = start_line(
@@ -161,7 +163,7 @@ def gate_handout(run: Run, unit: Unit) -> dict:
 
 
 def save_gate_pending(run: Run, unit: Unit, out: dict) -> None:
-    repo = run.repos[unit.ledger_repo]
+    repo = run.repos[unit.pr_repo]
     if unit.step:
         base = unit.latest["base"]
     else:
@@ -174,8 +176,7 @@ def save_gate_pending(run: Run, unit: Unit, out: dict) -> None:
         "pipeline": run.name,
         "actor": run.actor,
         "base": base,
-        "ledger_dir": run.ledger_dir,
-        "into": run.ledger_branch or run.parent_in(repo, unit.ctx.parent),
+        "into": run.parent_in(repo, unit.ctx.parent),
         "started": now(),  # a gate handed out again by a later `next` starts again
     }
     if unit.element_id:
@@ -213,11 +214,13 @@ def record_gate(run: Run, unit_id: str, verdict: dict | None, exit_code: int | N
     if pending["executor"] == "command":
         if exit_code is None:
             raise Fail(EXIT_USAGE, "a command gate is recorded with --exit")
-        gate["command"] = pending["command"]
+        # the attempt's path is this machine's: the ledger, which everyone shares, keeps `{attempt}`
+        command = pending["command"].replace(pending.get("attempt_path") or "\0", "{attempt}")
+        gate["command"] = command
         decision = "approve" if exit_code == 0 else "reject"
-        verdict = {"decision": decision, "reasons": [f"`{pending['command']}` exited {exit_code}"]}
+        verdict = {"decision": decision, "reasons": [f"`{command}` exited {exit_code}"]}
         if exit_code and output:
-            verdict["findings"] = [{"check": pending["command"], "message": tail(output)}]
+            verdict["findings"] = [{"check": command, "message": tail(output)}]
     else:
         if verdict is None:
             raise Fail(EXIT_USAGE, "an agent gate is recorded with --return, its verdict")
@@ -229,28 +232,22 @@ def record_gate(run: Run, unit_id: str, verdict: dict | None, exit_code: int | N
     entry["gate"] = gate
     entry["summary"] = "; ".join(verdict["reasons"]) or verdict["decision"]
     entry["verdict"] = verdict
-    repo = run.repos[pending["repo"]]
-    tree = repo.worktrees().get(pending["branch"])
-    if tree is None:
-        raise Fail(EXIT_REFUSED, f"check out {pending['branch']} in {repo.path} before recording the gate")
     name = entry_name(unit_id, pending["attempt"], gate=True)
-    target = Path(tree) / pending["ledger_dir"] / name
-    if target.exists():
-        raise Fail(EXIT_REFUSED, f"{target} exists; the ledger is append-only")
     times = timing(pending.get("started"), now())
     if "started" in times:
         entry |= {"started": times["started"], "ended": times["ended"]}
-    parse(dump_entry(entry), name)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(dump_entry(entry))
+    check_entry(entry, name)
+    if run.store.append(run.run, name, entry) == "exists":
+        raise Fail(EXIT_REFUSED, f"{run.run}/{name} is in the ledger already; the ledger is append-only")
     path.unlink()
+    pushed = push(run)
     return {
         "ok": True,
         "unit": unit_id,
         "gate": True,
         "attempt": pending["attempt"],
         "decision": gate["decision"],
-        "entry": str(target),
+        "entry": str(run.store.fact_path(run.run, name)),
         "recorded": entry,
         **times,
         "line": end_line(
@@ -260,4 +257,5 @@ def record_gate(run: Run, unit_id: str, verdict: dict | None, exit_code: int | N
             times,
             exit_code=exit_code if pending["executor"] == "command" else None,
         ),
+        **pushed,
     }

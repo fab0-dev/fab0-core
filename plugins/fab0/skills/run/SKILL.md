@@ -36,31 +36,32 @@ Repeat:
 2. **Checkouts.** Run every checkout command of the round, for every hand-out, in one Bash call: one command per line, in the order below and hand-out by hand-out, not chained with `&&`, so that one that fails doesn't stop the others. Read each one's output. For each hand-out, in the repository each entry of `branches` names:
    - an entry without `worktree` that doesn't exist: `git -C <path> branch <branch> <from>`. Another hand-out may have created it already; that is fine.
    - the entry with `worktree`: if that path is already a checkout of `branch`, use it. Otherwise `git -C <path> worktree add <worktree> <branch>` when `exists` is true, or `git -C <path> worktree add -b <branch> <worktree> <from>` when it isn't.
-   - with `sync: true`: `git -C <worktree> merge --no-edit <from>`. If it stops on conflicts (listed in `conflicts`), leave them: the brief tells the agent to resolve them, and the commit after `record` concludes the merge.
-   - a gate hand-out (`gate: true`) names one `worktree` on `branch`: add it the same way if it isn't there.
+   - with `sync: true`: `git -C <worktree> merge --no-edit <from>`. If it stops on conflicts (listed in `conflicts`), leave them: the brief tells the agent to resolve them, and `record`'s commit concludes the merge.
+   - a gate hand-out (`gate: true`) with a `branch` names one `worktree` on it: add it the same way if it isn't there. Without a `branch`, its `worktree` is the home checkout: add nothing.
+   - a hand-out with no `branches` (the unit writes no repository) needs no checkout.
    Other than the cases named here, if a command fails, show its output and stop.
 3. **Execute**, every hand-out of this round:
    - **agent** (a unit or a gate): call the Agent tool with `subagent_type` = `agent`, `model` = `model` and `prompt` = `brief`. Send all of the round's Agent calls in one message so they run in parallel, in the foreground: never with `run_in_background`, and never one after the other to make them easier to follow. Claude Code then shows each agent's activity (its tool calls) while it works. Wait for every one. Take the JSON object from each agent's final message (inside a code fence, take the fence's content), and keep it for step 4: it is written there, not now.
-   - **command**: run `command` with the unit's `worktree` (a gate's `worktree`) as the working directory, and keep its exit code. For a gate, save its output to `<returns>/<unit>-gate.txt` in the same call.
+   - **command**: run `command` with the unit's `worktree` (a gate's `worktree`; the home checkout for a unit with no `branches`) as the working directory, and keep its exit code. For a gate, save its output to `<returns>/<unit>-gate.txt` in the same call.
    - **tool**: call the tool named in `tool` with `with` as its arguments. If this session doesn't have that tool, don't imitate it: report it and stop. Then make the return for step 4, valid against `return_schema`: `summary` is one line on what the call did, plus `data` if the schema asks for it, taken from the tool's result.
-4. **Record and commit**, each hand-out, in one Bash call per hand-out: write its return file, then `record`, then the commit of what it wrote, chained with `&&` so a refused record commits nothing. Send all of the round's calls in one message, so they run together. End each call with `|| echo "failed: exit $?"`, so that a refusal doesn't stop the others of its message.
+4. **Record**, each hand-out, in one Bash call per hand-out: write its return file, then `record`, chained with `&&`. `record` commits the unit's work on its branch and writes its ledger entry into the run store; a refused record commits nothing. Never commit or push yourself. Send all of the round's calls in one message, so they run together. End each call with `|| echo "failed: exit $?"`, so that a refusal doesn't stop the others of its message.
    - the return file: `<returns>/<unit>.json` for a unit, `<returns>/<unit>-gate.json` for a gate. Each hand-out has its own, so the round's calls, which run together, never share a path and never read each other's return. Write it as a quoted heredoc inside the call, before `record`, so no other turn writes it. Use a delimiter the JSON can't hold (`FAB0_RETURN`). Command units and gates, which return an exit code, have no return file: record them with `--exit <code>` (a gate's output is already saved in `<returns>/<unit>-gate.txt`);
    - a unit: `fab0-resolve record <run> <unit> --return <returns>/<unit>.json`, or `--exit <code>` for a command;
    - a gate: `fab0-resolve record <run> <unit> --gate --return <returns>/<unit>-gate.json`, or `--gate --exit <code> --output <returns>/<unit>-gate.txt` for a command.
-   - then, in the checkout `record` writes to (each `worktree` of the unit, or the gate's: chain one `add` and `commit` for each), with the hand-out's `attempt` and `fab0_version`, and the first line of the return's `summary` (for a command, `exit <code>`):
+   - for example:
      ```bash
      mkdir -p <returns> && cat > <returns>/<unit>.json <<'FAB0_RETURN' \
        && fab0-resolve record <run> <unit> --return <returns>/<unit>.json \
-       && git -C <worktree> add -A && git -C <worktree> commit -m "<unit> attempt <attempt> (fab0 <fab0_version>): <first line of the summary>" \
        || echo "failed: exit $?"
      <the return's JSON>
      FAB0_RETURN
      ```
-     For a gate: `<returns>/<unit>-gate.json` in place of `<returns>/<unit>.json`, `record <run> <unit> --gate`, and the message `"<unit> gate <attempt>: <decision, or exit code>"`. Don't push; `apply` pushes what it merges, opens a pull request for, or keeps on the ledger branch.
+     For a gate: `<returns>/<unit>-gate.json` in place of `<returns>/<unit>.json`, and `record <run> <unit> --gate`.
    - Show each result's `line` (its end line: the outcome and how long it took), for every unit and gate, verified or not, once the round's calls are back. When a result has no `line`, say that it was recorded.
-   - If one is refused because the return doesn't match its schema, the others were recorded and committed all the same. Call the same agent once more with the brief followed by the `errors`, and record and commit again in the same way. If it is refused again, or refused for any other reason (writes outside the unit's claims, a missing checkout), show the refusal and stop. The person decides how to undo writes; then the same `record` works.
+   - If one is refused because the return doesn't match its schema, the others were recorded all the same. Call the same agent once more with the brief followed by the `errors`, and record again in the same way. If it is refused again, or refused for any other reason (writes outside the unit's claims, a missing checkout), show the refusal and stop. The person decides how to undo writes; then the same `record` works.
    - `verified: false` is not a failure of yours: say so and go on. The next round hands the unit out again with the failures in its brief.
    - If a result lists `outside`, tell the person: files appeared beside the repositories while the unit ran.
+   - If a result has `unpushed`, say so in one line: the entry is recorded here, and the next `apply` pushes it.
 5. Go back to 1.
 
 Stop early if a round hands out exactly what the round before handed out, with the same attempts, after they were recorded: something is wrong. Report it.

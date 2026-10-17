@@ -12,7 +12,7 @@ git:
   branching: run
   auto_merge: {into: [run]}
 parallel: {max: 3, cross_run: warn}
-ledger: {path: "work/{run}/ledger"}
+store: {path: ../runs}
 models:
   claude-code: {deep: opus, balanced: sonnet, fast: haiku}
 profiles:

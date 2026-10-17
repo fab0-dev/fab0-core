@@ -127,7 +127,7 @@ query($owner: String!, $repo: String!, $head: String!, $base: String!) {
   repository(owner: $owner, name: $repo) {
     pullRequests(headRefName: $head, baseRefName: $base, states: [OPEN, CLOSED, MERGED], first: 100) {
       nodes {
-        number state isDraft body
+        number state isDraft body headRefOid
         headRepository { nameWithOwner }
         reviews(first: 100) { nodes { databaseId state body submittedAt author { login __typename } } }
         comments(first: 100) { nodes { databaseId body createdAt author { login __typename } } }
@@ -307,6 +307,7 @@ class GhCli:
                     "number": d["number"],
                     "state": d["state"].lower(),
                     "draft": bool(d.get("isDraft")),
+                    "head": d.get("headRefOid"),
                     "body": d.get("body") or "",
                     "reviews": [
                         {
@@ -519,6 +520,7 @@ class GhFake:
                 "number": p["number"],
                 "state": p.get("state", "open"),
                 "draft": p.get("draft", False),
+                "head": p.get("head"),
                 "body": p.get("body", ""),
                 "reviews": p.get("reviews", []),
                 "comments": p.get("comments", []),

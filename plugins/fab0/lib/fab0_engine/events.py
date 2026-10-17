@@ -125,8 +125,8 @@ def state_line(state: str, unit: str, reason: dict | None) -> str:
 
 def apply_text(entry: dict) -> tuple[str, str | None]:
     """An entry of `apply`'s `applied` as the line of its event, and its unit, if it has one."""
-    if "ledger" in entry:
-        return f"apply: ledger: {entry['ledger']}", None
+    if "store" in entry:
+        return f"apply: store: {entry['store']}", None
     if "item" in entry:
         return f"apply: {entry['item']}: signal {entry['signal']}", None
     unit = entry["unit"]
@@ -191,7 +191,7 @@ class EventLog:
     def applied(self, applied: list[dict]) -> None:
         """One event per entry of `apply`'s `applied`, in order, except a unit's entry that repeats the last
         `apply` event of that unit: `apply` reports a merge that waits for checks every time. An item's or a
-        ledger push is a new action each time, and is always logged."""
+        store push is a new action each time, and is always logged."""
         if not applied:
             return
         last: dict[str, str] = {}

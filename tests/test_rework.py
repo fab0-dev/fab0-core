@@ -46,8 +46,13 @@ def test_inputs_and_outputs_are_hashed_in_the_ledger(story):
     assert set(entry["inputs"]) == {"spec", "unit", "reviews"}
     assert all(h.startswith("sha256:") for h in entry["inputs"].values())
     assert "verify" not in entry, "implement declares no outputs and stayed in its claims"
-    spec = git(story.repo("home"), "show", "fab0/412/spec:work/412/ledger/spec-1.yaml")
-    assert "outputs:" in spec and "spec: sha256:" in spec and "verify:" in spec and "spec: pass" in spec
+    spec = story.fact("412", "spec-1")
+    assert spec["outputs"]["spec"].startswith("sha256:") and spec["verify"]["spec"] == "pass"
+    assert spec["heads"] == {"home": git(story.repo("home"), "rev-parse", "fab0/412/spec")}, "the commit it made"
+    assert entry["heads"] == {"backend": git(story.repo("backend"), "rev-parse", "fab0/412/implement-T1")}
+    assert not git(story.repo("home"), "ls-tree", "-r", "--name-only", "fab0/412/spec", "--", "work/412/ledger"), (
+        "the ledger isn't in the product repository"
+    )
 
 
 def test_failed_checks_hand_out_a_new_attempt_with_the_findings(story):

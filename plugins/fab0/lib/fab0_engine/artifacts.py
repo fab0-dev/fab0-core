@@ -131,7 +131,7 @@ def pr_view(run, name: str, ctx, unit=None) -> View:
     if spec.get("of", "run") == "unit":
         if unit is None or not unit.branch:
             return View(sha_json([]) if part == "reviews" else None, "This unit has no pull request.")
-        repo = run.repos[unit.ledger_repo]
+        repo = run.repos[unit.pr_repo]
         head, base = unit.branch, run.parent_in(repo, ctx.parent)
     else:
         repo = run.home

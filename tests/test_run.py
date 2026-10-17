@@ -49,24 +49,19 @@ def start_work(f, handout: dict) -> dict[str, Path]:
 
 
 def finish(f, run: str, handout: dict, trees: dict, files: dict | None = None, returned=None, exit=None, **kw):
-    """Write the files, record the unit, and commit everything on its branch."""
+    """Write the files and record the unit, which commits them on its branch."""
     for (repo, rel), text in (files or {}).items():
         path = trees[repo] / rel
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text)
     args = ["record", run, handout["unit"], *kw.get("extra", [])]
     if returned is not None:
-        path = trees[handout["repo"]] / ".." / f"{handout['unit']}-return.json"
+        path = f.home.parent / f"{handout['unit']}-return.json"
         path.write_text(json.dumps(returned))
         args += ["--return", str(path)]
     if exit is not None:
         args += ["--exit", str(exit)]
-    res = f.run(*args, expect=kw.get("expect", 0))
-    if kw.get("expect", 0) == 0:
-        for tree in trees.values():
-            git(tree, "add", "-A")
-            git(tree, "commit", "-q", "-m", f"{handout['unit']} attempt {handout['attempt']}")
-    return res
+    return f.run(*args, expect=kw.get("expect", 0))
 
 
 def started(f):
@@ -351,11 +346,9 @@ def test_a_gated_block_has_its_own_branch(docs):
     links = handouts(res)["parallel-3--links"]
     finish(docs, "docs-1", links, start_work(docs, links), exit=1)
     s = states(docs.run("status", "docs-1"))
-    assert s["parallel-3--spelling"] == ("waiting", {"gate": "merge"})
+    assert s["parallel-3--spelling"] == ("done", None), "a check that changed nothing has nothing to merge"
     assert s["parallel-3--links"] == ("blocked", {"failed": "exit 1"})
-    docs.merge("home", "docs/docs-1--parallel-3--spelling", "docs/docs-1--parallel-3")
-    s = states(docs.run("status", "docs-1"))
-    assert s["parallel-3--spelling"] == ("done", None) and s["parallel-3--index"] == ("ready", None)
+    assert s["parallel-3--index"] == ("ready", None)
 
 
 def test_a_command_is_recorded_with_its_exit_code(docs):
@@ -365,7 +358,7 @@ def test_a_command_is_recorded_with_its_exit_code(docs):
     assert "recorded with --return" in res["error"]
 
 
-# ---------------------------------------------------------------- triage: no pull requests, a ledger branch
+# ---------------------------------------------------------------- triage: no pull requests, no files
 
 TRIAGE_GH = {
     "user": "support-user",
@@ -373,20 +366,25 @@ TRIAGE_GH = {
 }
 
 
-def test_a_run_without_files_works_on_the_ledger_branch(factory):
+def test_a_run_without_files_records_into_the_run_store(factory):
     f = factory("triage").init_git(TRIAGE_GH)
     res = f.run("next", "7")
     assert res["kind"] == "units", "flat branching: no run branch to wait for"
     assert states(res)["classify"] == ("ready", None)
     h = handouts(res)["classify"]
-    assert h["branch"] == "fab0/ledger" and h["claims"] == {}
-    assert h["branches"][0]["from"] == "main" and not h["branches"][0]["exists"]
+    assert h["branch"] == "fab0/7/classify" and h["claims"] == {}
+    assert h["branches"][0]["from"] == "main" and h["branches"][0]["exists"], "next claimed it by creating it"
     assert "500 on pay." in h["brief"]
     assert h["return_schema"]["properties"]["data"]["required"] == ["severity", "area"]
     bad = finish(f, "7", h, start_work(f, h), returned={"summary": "x", "data": {"severity": "dire"}}, expect=4)
     assert "doesn't match its schema" in bad["error"]
     trees = {"home": Path(h["branches"][0]["worktree"])}
-    finish(f, "7", h, trees, returned={"summary": "Billing.", "data": {"severity": "high", "area": "billing"}})
+    res = finish(f, "7", h, trees, returned={"summary": "Billing.", "data": {"severity": "high", "area": "billing"}})
+    assert "heads" not in res["recorded"], "it changed nothing, so there is nothing to merge"
+    assert f.fact("7", "classify-1")["data"] == {"severity": "high", "area": "billing"}
+    assert (
+        git(f.repo("home"), "log", "--format=%s", "main..fab0/7/classify") == "fab0: support-user takes fab0/7/classify"
+    )
     s = states(f.run("status", "7"))
     assert s["classify"] == ("waiting", {"gate": "gate"}), "its auto gate decides from step R2d"
     assert s["label"] == ("blocked", {"order": "classify"})

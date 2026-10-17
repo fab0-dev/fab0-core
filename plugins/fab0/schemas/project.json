@@ -3,7 +3,7 @@
   "title": "fab0 project file (.fab0/fab0.yaml), schema 2",
   "description": "The one project file, in the home repo. It names the repositories, the people, the tracker, the git policy, the model classes and the pipelines of a factory.",
   "type": "object",
-  "required": ["schema", "repos", "pipelines", "models"],
+  "required": ["schema", "repos", "store", "pipelines", "models"],
   "additionalProperties": false,
   "properties": {
     "schema": {"const": 2},
@@ -76,22 +76,6 @@
         "cross_run": {
           "description": "What an overlap of path claims with another open run does.",
           "enum": ["warn", "block"]
-        }
-      }
-    },
-    "ledger": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "path": {
-          "description": "Where ledger entries go, in the repository a unit ran in.",
-          "type": "string",
-          "pattern": "\\{run\\}"
-        },
-        "branch": {
-          "description": "A branch that holds the ledger entries of runs that open no pull request, for example a pipeline whose artifacts all live in the tracker. It is pushed, never merged.",
-          "type": "string",
-          "minLength": 1
         }
       }
     },

@@ -1,6 +1,5 @@
 """Conflicts, failing checks and claims: what keeps parallel work from colliding, across units, runs and machines."""
 
-import json
 from pathlib import Path
 
 from conftest import git
@@ -102,13 +101,13 @@ def test_apply_brings_a_reworked_branch_up_to_date(story):
 
 
 def remotes(f) -> None:
-    """A bare `origin` for every repository, as GitHub would be."""
-    for name in f.read("fab0.yaml")["repos"]:
-        path = f.repo(name)
+    """A bare `origin` for every repository and for the run store, as GitHub would be."""
+    for path in [f.repo(name) for name in f.read("fab0.yaml")["repos"]] + [f.store_path()]:
         bare = path.parent / "remotes" / f"{path.name}.git"
-        git(path.parent, "init", "-q", "--bare", str(bare))
+        git(path.parent, "init", "-q", "--bare", "-b", "main", str(bare))
         git(path, "remote", "add", "origin", str(bare))
-        git(path, "push", "-q", "origin", "--all")
+        if git(path, "rev-parse", "-q", "--verify", "HEAD", check=False):
+            git(path, "push", "-q", "origin", "--all")
 
 
 def test_a_unit_claimed_on_another_machine_isnt_handed_out(story):
@@ -135,7 +134,7 @@ def test_next_claims_a_unit_on_the_remote(story):
 
 
 def other_run_claims(f, run: str, unit: str, claims: list) -> None:
-    """Another run's unit branch, unmerged, whose ledger entry claims `claims`."""
+    """Another run's unit branch, unmerged, whose ledger entry in the run store claims `claims`."""
     entry = {
         "step": "implement",
         "unit": unit.rsplit("-", 1)[1],
@@ -149,13 +148,9 @@ def other_run_claims(f, run: str, unit: str, claims: list) -> None:
     }
     path = f.repo("backend")
     git(path, "branch", f"fab0/{run}/{unit}", "main")
-    commit_on(
-        f,
-        "backend",
-        f"fab0/{run}/{unit}",
-        {f"work/{run}/ledger/{unit}-1.yaml": json.dumps(entry), "src/a.py": "x = 9\n"},
-        f"{unit} of run {run}",
-    )
+    commit_on(f, "backend", f"fab0/{run}/{unit}", {"src/a.py": "x = 9\n"}, f"{unit} of run {run}")
+    entry["heads"] = {"backend": git(path, "rev-parse", f"fab0/{run}/{unit}")}
+    f.put_fact(run, f"{unit}-1", entry)
 
 
 def test_claims_of_another_open_run_warn(story):

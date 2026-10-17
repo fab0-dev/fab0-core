@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "fab0 ledger entry, schema 2 ({ledger.path}/<step>[-<unit>]-<attempt>[-gate].yaml)",
-  "description": "One attempt of a step, or one gate decision on it. Append-only, written by the engine, and carried to the base branch by merges.",
+  "title": "fab0 ledger entry, schema 2 (runs/<project>/<run>/ledger/<step>[-<unit>]-<attempt>[-gate].yaml in the run store)",
+  "description": "One attempt of a step, or one gate decision on it: a create-only fact in the run store, written by the engine.",
   "type": "object",
   "required": ["step", "attempt", "executor", "actor", "branch", "base", "gate"],
   "additionalProperties": false,
@@ -13,6 +13,11 @@
     "actor": {"description": "The tracker user who ran it.", "type": "string", "minLength": 1},
     "model": {"type": "string", "minLength": 1},
     "branch": {"description": "The branch the attempt was made on.", "type": "string", "minLength": 1},
+    "heads": {
+      "description": "Per repository, the commit the attempt left its branch at, when the branch has commits its parent lacks. The unit is done once these are in the branch it merges into.",
+      "type": "object",
+      "additionalProperties": {"type": "string", "pattern": "^[0-9a-f]{40}$"}
+    },
     "base": {
       "description": "The parent branch and the commit the inputs were read at.",
       "type": "object",

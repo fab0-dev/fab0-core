@@ -78,8 +78,38 @@ class Factory:
             git(path, "config", "user.name", "test")
             git(path, "add", "-A")
             git(path, "commit", "-q", "-m", "start")
+        store = self.store_path()
+        if not store.exists():  # the run store: a local repository, with no remote
+            store.mkdir(parents=True)
+            git(store, "init", "-q", "-b", "main")
+            git(store, "config", "user.email", "test@example.com")
+            git(store, "config", "user.name", "test")
         self.gh_path.write_text(json.dumps(gh or {"user": "tester", "issues": {}}))
         return self
+
+    def store_path(self) -> Path:
+        return (self.home / self.read("fab0.yaml")["store"]["path"]).resolve()
+
+    def project_key(self) -> str:
+        cfg = self.read("fab0.yaml")
+        return cfg["store"].get("project") or cfg["repos"]["home"]["github"].split("/")[1]
+
+    def facts(self, run: str) -> dict:
+        """The run's ledger in the run store, by fact name."""
+        folder = self.store_path() / "runs" / self.project_key() / run / "ledger"
+        return {p.stem: yaml.safe_load(p.read_text()) for p in sorted(folder.glob("*.yaml"))} if folder.is_dir() else {}
+
+    def fact(self, run: str, name: str) -> dict:
+        return self.facts(run)[name]
+
+    def put_fact(self, run: str, name: str, fact: dict) -> None:
+        """A ledger entry written as `record` would, for a test to set up a run."""
+        rel = f"runs/{self.project_key()}/{run}/ledger/{name}.yaml"
+        path = self.store_path() / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(yaml.safe_dump(fact, sort_keys=False))
+        git(self.store_path(), "add", rel)
+        git(self.store_path(), "commit", "-q", "-m", f"{run}: {name}")
 
     def branch(self, repo: str, name: str, start: str) -> None:
         git(self.repo(repo), "branch", name, start)

@@ -5,7 +5,7 @@ onStart:
   - tracker.label: {add: [triaging], remove: [needs-triage]}
 steps:
   - step: classify
-    gate: {auto: {command: "python3 .fab0/checks/classification.py"}, retry: 1, then: fail}
+    gate: {auto: {command: "python3 .fab0/checks/classification.py {attempt}"}, retry: 1, then: fail}
   - step: label
     action: tracker.label
     with: {add: ["severity-{classify.severity}", "area-{classify.area}"]}

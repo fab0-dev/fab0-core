@@ -6,7 +6,7 @@ One call loops until nothing more can be done:
   approval, within `git.auto_merge` and once its pull request's required checks pass;
 - every unit a person must look at gets a pull request: a draft until its gate approves, then ready. A pull
   request is never turned back into a draft (from #17), and questions and escalations are posted on it once;
-- the ledger branch, if the pipeline keeps one, is pushed;
+- what was recorded in the run store and not pushed yet is pushed (D74);
 - with `tracker.fields.signal` set, the run's item and its elements' items show their state on the board.
 
 What it did, and where the run waits on a person or is blocked, goes to the run's event log (`events`).
@@ -186,7 +186,7 @@ def run_pulls(run: Run, draft: bool, only_home: bool) -> str:
 def repos_of(run: Run, unit: Unit) -> list[str]:
     """Where a unit's branch is: the repositories a step writes, or every one that has a gated block's branch."""
     if unit.step:
-        return list(dict.fromkeys(unit.write or [unit.ledger_repo]))
+        return list(dict.fromkeys(unit.write or [unit.pr_repo]))
     return [name for name, repo in run.repos.items() if repo.exists() and repo.fresh(unit.branch)]
 
 
@@ -248,8 +248,9 @@ def unit_pull(run: Run, unit: Unit) -> list[str]:
     for name in names:
         repo = run.repos[name]
         parent = run.parent_in(repo, unit.ctx.parent)
-        if not repo.fresh(unit.branch):
-            continue
+        head, base = repo.fresh(unit.branch), repo.fresh(parent)
+        if not head or base and repo.is_ancestor(head, base):
+            continue  # nothing on the branch to look at: GitHub opens no pull request without a change
         Writer(repo).push(unit.branch)
         pr = run.tracker.pull(repo.github, unit.branch, parent)
         if pr is None or pr["state"] in ("closed", "merged"):  # merged at an older attempt: a new one
@@ -282,18 +283,14 @@ def unit_pull(run: Run, unit: Unit) -> list[str]:
     return done
 
 
-def publish_ledger(run: Run) -> str | None:
-    """Push the ledger branch when the remote lacks what was recorded on it (D18)."""
-    branch = run.ledger_branch
-    repo = run.home
-    if not branch or not repo.ref_exists(branch) or not Writer(repo).has_remote():
+def publish_store(run: Run) -> str | None:
+    """Push what was recorded in the run store when a record couldn't push it (D74)."""
+    writes = run.store.ahead() if run.store else 0
+    if not writes:
         return None
-    remote = f"origin/{branch}"
-    if repo.ref_exists(remote) and repo.is_ancestor(branch, remote):
-        return None
-    Writer(repo).push(branch)
-    repo._fresh.clear()
-    return f"pushed {branch}"
+    lost = run.store.sync("push")
+    said = f"pushed {writes} write{'s' if writes != 1 else ''}"
+    return said + (f"; {', '.join(f'{r}/{n}' for r, n in lost)} recorded first elsewhere" if lost else "")
 
 
 def describe(unit: Unit) -> str:
@@ -383,9 +380,9 @@ def rounds(run: Run, only: str | None, applied: list[dict]) -> tuple[Run, dict]:
                 for did in unit_pull(run, unit):
                     applied.append({"unit": unit.id, "pull": did})
         if not progress:
-            pushed = publish_ledger(run)
+            pushed = publish_store(run)
             if pushed:
-                applied.append({"ledger": pushed})
+                applied.append({"store": pushed})
             applied += [{"item": ref, "signal": text} for ref, text in signals(run, result)]
             out = {**result, "applied": applied}
             warnings = log_events(run, applied, result)  # a log that can't be written is a warning, nothing more

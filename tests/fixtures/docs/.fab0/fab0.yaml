@@ -6,6 +6,7 @@ repos:
 people:
   docs-owner: {github: [docs-user]}
 tracker: {kind: github, owner: acme}
+store: {path: ../runs}
 git: {branching: run, branches: {run: "docs/{run}", unit: "docs/{run}--{unit}"}}
 models:
   claude-code: {deep: opus, balanced: sonnet, fast: haiku}

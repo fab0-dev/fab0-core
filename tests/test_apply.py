@@ -177,6 +177,23 @@ def test_a_new_attempt_after_a_merged_pull_request_gets_a_new_one(story):
     assert story.run("apply", "412")["applied"] == []
 
 
+def test_a_squash_merged_unit_is_done(story):
+    """MIGRATION M2: a person squashes the spec's pull request on GitHub, so its commits never reach the run
+    branch; GitHub's merged state at the recorded commit decides."""
+    spec_done(story)
+    story.run("apply", "412")  # the spec's pull request, acme/shop#2
+    home = story.repo("home")
+    here = git(home, "rev-parse", "--abbrev-ref", "HEAD")
+    git(home, "checkout", "-q", "fab0/412/base")
+    git(home, "merge", "-q", "--squash", "fab0/412/spec")
+    git(home, "commit", "-q", "-m", "Spec for run 412 (#2)")
+    git(home, "checkout", "-q", here)
+    assert states(story.run("status", "412"))["spec"] == ("waiting", {"gate": "human"}), "GitHub hasn't said yet"
+    head = story.fact("412", "spec-1")["heads"]["home"]
+    story.gh_edit(lambda d: d["pulls"]["acme/shop"][1].update(state="merged", head=head))
+    assert states(story.run("status", "412"))["spec"] == ("done", None)
+
+
 def test_a_foreach_closes_its_items_at_its_end(story):
     """From R6: task pull requests merge into the run branch, which closes no issue, so the foreach does."""
     close = [{"tracker.child.close": {"type": "Task"}}]

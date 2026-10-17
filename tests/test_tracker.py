@@ -146,7 +146,7 @@ def test_a_pull_request_comes_with_its_reviews_and_comments(story):
     story.reset_calls()
     tracker = Memo(GhFake(str(story.gh_path)))
     [pull] = tracker.pulls("acme/shop-api", "fab0/412/implement-T1", "fab0/412/base")
-    assert set(pull) == {"number", "state", "draft", "body"}
+    assert set(pull) == {"number", "state", "draft", "head", "body"}
     assert tracker.reviews("acme/shop-api", pull["number"]) == [REVIEW]
     assert [c["body"] for c in tracker.comments("acme/shop-api", pull["number"])] == ["Hi"]
     assert [c["method"] for c in story.calls()] == ["pulls"]
