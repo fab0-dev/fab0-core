@@ -29,6 +29,16 @@ def test_schema_1_is_refused_with_a_hint(factory):
     assert "this is schema 1, the fab0 0.5 wiring" in messages(f)
 
 
+def test_the_store_block(factory):
+    f = factory("story")
+    f.edit("fab0.yaml", lambda d: d.update(store={"github": "acme/runs", "project": "shop"}))
+    assert f.run("validate")["ok"]
+    f.edit("fab0.yaml", lambda d: d.update(store={"project": "shop"}))
+    assert "store" in messages(f)
+    f.edit("fab0.yaml", lambda d: d.update(store={"path": "../runs", "project": "Shop"}))
+    assert "store" in messages(f)
+
+
 def test_a_stages_directory_is_refused(factory):
     f = factory("story")
     (f.home / ".fab0" / "stages").mkdir()

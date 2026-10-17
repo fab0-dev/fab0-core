@@ -95,6 +95,28 @@
         }
       }
     },
+    "store": {
+      "description": "The run store: the runs repository that holds what runs produce for themselves (their ledger and store artifacts), so the product repositories receive only product changes. One runs repository serves every factory of a product, each under its own `project` key.",
+      "type": "object",
+      "additionalProperties": false,
+      "anyOf": [{"required": ["github"]}, {"required": ["path"]}],
+      "properties": {
+        "github": {
+          "description": "The runs repository on GitHub.",
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
+        },
+        "project": {
+          "description": "This factory's folder in the runs repository, `runs/<project>/`. Default: the home repository's name.",
+          "$ref": "#/$defs/name"
+        },
+        "path": {
+          "description": "A checkout of the runs repository, relative to the home repo. Default: a clone the engine keeps in the home repo's git directory.",
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
     "pipelines": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/name"}},
     "models": {
       "description": "Model classes, per harness.",
