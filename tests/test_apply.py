@@ -23,16 +23,14 @@ def test_apply_starts_a_run_and_a_second_apply_changes_nothing(story):
     res = story.run("apply", "412")
     assert [(a["unit"], a["action"]) for a in res["applied"]] == [
         ("onStart-1", "git.run-branch"),
-        ("onStart-2", "pr.open-run"),
         ("onStart-3", "tracker.field"),
     ]
     assert res["applied"][0]["did"] == "created fab0/412/base in home, backend"
-    pull = gh(story)["pulls"]["acme/shop"][0]
-    assert pull["branch"] == "fab0/412/base" and pull["base"] == "main" and pull["draft"]
-    assert pull["title"] == "story run 412: Extend a booking" and pull["body"].endswith("Closes #412")
+    assert actions(res)["onStart-2"] == ("pr.open-run", "done", None), "no run branch has work yet (D82)"
+    assert "pulls" not in gh(story), "no pull request without a change"
     assert gh(story)["issues"]["acme/shop#412"]["fields"] == {"State": "Started"}
-    log = git(story.repo("home"), "log", "--format=%s", "fab0/412/base")
-    assert log.splitlines()[0] == "fab0: start run 412 (story)", "an empty commit, so the pull request can open"
+    for repo in ("home", "backend"):
+        assert git(story.repo(repo), "rev-parse", "fab0/412/base") == git(story.repo(repo), "rev-parse", "main")
     assert states(res)["spec"] == ("ready", None)
     again = story.run("apply", "412")
     assert again["applied"] == []
@@ -48,8 +46,8 @@ def spec_done(f, tasks=ONE_TASK, spec=SPEC):
 def test_a_human_gate_gets_a_ready_pull_request(story):
     spec_done(story)
     res = story.run("apply", "412")
-    assert did(res) == [{"unit": "spec", "pull": "opened acme/shop#2"}]
-    pull = gh(story)["pulls"]["acme/shop"][1]
+    assert did(res) == [{"unit": "spec", "pull": "opened acme/shop#1"}]
+    pull = gh(story)["pulls"]["acme/shop"][0]
     assert (pull["branch"], pull["base"], pull["draft"]) == ("fab0/412/spec", "fab0/412/base", False)
     assert pull["body"].startswith("Wrote the spec.")
     assert story.run("apply", "412")["applied"] == []
@@ -59,7 +57,17 @@ def test_after_the_merge_apply_makes_the_sub_issues(story):
     spec_done(story)
     story.merge("home", "fab0/412/spec", "fab0/412/base")
     res = story.run("apply", "412")
-    assert did(res) == [{"unit": "tasks--onStart-1", "action": "tracker.child.sync", "did": "created #413"}]
+    assert did(res) == [
+        {"unit": "tasks--onStart-1", "action": "tracker.child.sync", "did": "created #413"},
+        {"unit": "onStart-2", "action": "pr.open-run", "did": "opened acme/shop#1"},  # the run branch has work now
+    ]
+    run_pull = gh(story)["pulls"]["acme/shop"][0]
+    assert (
+        run_pull["branch"] == "fab0/412/base"
+        and run_pull["draft"]
+        and run_pull["body"].endswith("Closes acme/shop#412")
+    )
+    assert run_pull["title"] == "story run 412: Extend a booking"
     data = gh(story)
     assert data["issues"]["acme/shop#413"]["title"] == "Booking API"
     assert data["issues"]["acme/shop#413"]["type"] == "Task"
@@ -133,11 +141,8 @@ def test_questions_are_posted_once(story):
     h = handouts(story.run("next", "412"))["spec"]
     finish(story, "412", h, start_work(story, h), returned={"summary": "?", "questions": ["How many nights?"]})
     res = story.run("apply", "412")
-    assert did(res) == [
-        {"unit": "spec", "pull": "opened acme/shop#2"},
-        {"unit": "spec", "pull": "commented on acme/shop#2"},
-    ]
-    comment = gh(story)["pulls"]["acme/shop"][1]["comments"][0]["body"]
+    assert did(res) == [{"unit": "spec", "pull": "commented on acme/shop#412"}], "no change, so no pull request"
+    comment = gh(story)["issues"]["acme/shop#412"]["comments"][0]["body"]
     assert comment.startswith("<!-- fab0:questions spec 1 -->") and "- How many nights?" in comment
     assert story.run("apply", "412")["applied"] == []
 
@@ -170,9 +175,9 @@ def test_a_new_attempt_after_a_merged_pull_request_gets_a_new_one(story):
     request can't carry the new attempt, so apply opens another."""
     spec_done(story)
     story.run("apply", "412")
-    story.gh_edit(lambda d: d["pulls"]["acme/shop"][1].update(state="merged"))
+    story.gh_edit(lambda d: d["pulls"]["acme/shop"][0].update(state="merged"))
     res = story.run("apply", "412")
-    assert did(res) == [{"unit": "spec", "pull": "opened acme/shop#3"}]
+    assert did(res) == [{"unit": "spec", "pull": "opened acme/shop#2"}]
     assert story.run("apply", "412")["applied"] == []
 
 
@@ -180,7 +185,7 @@ def test_a_squash_merged_unit_is_done(story):
     """MIGRATION M2: a person squashes the spec's pull request on GitHub, so its commits never reach the run
     branch; GitHub's merged state at the recorded commit decides."""
     spec_done(story)
-    story.run("apply", "412")  # the spec's pull request, acme/shop#2
+    story.run("apply", "412")  # the spec's pull request, acme/shop#1
     home = story.repo("home")
     here = git(home, "rev-parse", "--abbrev-ref", "HEAD")
     git(home, "checkout", "-q", "fab0/412/base")
@@ -189,7 +194,7 @@ def test_a_squash_merged_unit_is_done(story):
     git(home, "checkout", "-q", here)
     assert states(story.run("status", "412"))["spec"] == ("waiting", {"gate": "human"}), "GitHub hasn't said yet"
     head = story.fact("412", "spec-1")["heads"]["home"]
-    story.gh_edit(lambda d: d["pulls"]["acme/shop"][1].update(state="merged", head=head))
+    story.gh_edit(lambda d: d["pulls"]["acme/shop"][0].update(state="merged", head=head))
     assert states(story.run("status", "412"))["spec"] == ("done", None)
 
 

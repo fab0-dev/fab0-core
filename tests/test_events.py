@@ -128,10 +128,9 @@ def test_apply_logs_one_event_per_entry_in_order(story):
     story.run("apply", "412")
     assert lines(story) == [
         "apply: onStart-1: git.run-branch: created fab0/412/base in home, backend",
-        "apply: onStart-2: pr.open-run: opened acme/shop#1",
         "apply: onStart-3: tracker.field: set State to Started",
     ]
-    assert [e["unit"] for e in events(story) if e["kind"] == "apply"] == ["onStart-1", "onStart-2", "onStart-3"]
+    assert [e["unit"] for e in events(story) if e["kind"] == "apply"] == ["onStart-1", "onStart-3"]
     assert all(e["kind"] == "apply" and TIME.match(e["time"]) for e in events(story))
     before = events(story)
     assert story.run("apply", "412")["applied"] == []
@@ -143,7 +142,6 @@ def test_next_apply_logs_what_it_applied_then_each_hand_out(story):
     spec = handouts(res)["spec"]
     assert [(e["kind"], e["line"]) for e in events(story)] == [
         ("apply", "apply: onStart-1: git.run-branch: created fab0/412/base in home, backend"),
-        ("apply", "apply: onStart-2: pr.open-run: opened acme/shop#1"),
         ("apply", "apply: onStart-3: tracker.field: set State to Started"),
         ("handout", spec["line"]),
     ]
@@ -159,7 +157,7 @@ def test_apply_logs_a_pull_request_and_a_merge(story):
     record_gate(story, "412", "implement-T1", verdict("approve"))
     story.run("apply", "412")
     said = lines(story, "apply")
-    assert "apply: spec: opened acme/shop#2" in said
+    assert "apply: spec: opened acme/shop#1" in said
     opened = next(x for x in said if x.startswith("apply: implement-T1: opened acme/shop-api#"))
     merged = "apply: implement-T1: merged into backend:fab0/412/base"
     assert said.index(opened) < said.index(merged)
@@ -371,16 +369,16 @@ def test_a_log_that_cant_be_written_is_a_warning_and_nothing_else(unwritable):
     f = unwritable
     res = f.run("apply", "412")
     assert len(warned(res)) == 1 and "events" in warned(res)[0]
-    assert [a["unit"] for a in res["applied"]] == ["onStart-1", "onStart-2", "onStart-3"]
+    assert [a["unit"] for a in res["applied"]] == ["onStart-1", "onStart-3"]
     spec = f.run("next", "412")
     assert len(warned(spec)) == 1 and [h["unit"] for h in spec["handouts"]] == ["spec"]
     h = spec["handouts"][0]
     files = {("home", "specs/412.md"): SPEC, ("out", "tasks.yaml"): ONE_TASK}
     rec = finish(f, "412", h, start_work(f, h), files, {"summary": "Wrote it."})
     assert rec["verified"] and len(warned(rec)) == 1 and rec["line"].startswith("spec, attempt 1: ")
-    assert gh(f)["pulls"]["acme/shop"][0]["draft"], "the work itself was done"
+    assert gh(f)["issues"]["acme/shop#412"]["fields"] == {"State": "Started"}, "the work itself was done"
     res = f.run("apply", "412")
-    assert len(warned(res)) == 1 and res["applied"] == [{"unit": "spec", "pull": "opened acme/shop#2"}]
+    assert len(warned(res)) == 1 and res["applied"] == [{"unit": "spec", "pull": "opened acme/shop#1"}]
     assert git(f.repo("home"), "status", "--porcelain") == "", "the log moves nothing in git"
 
 

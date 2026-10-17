@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "fab0 claim, schema 2 (runs/<project>/<run>/ledger/<step>[-<unit>]-<attempt>-claim.yaml in the run store)",
+  "description": "Who took one attempt of a unit: a create-only fact `next` writes and pushes before it hands the attempt out. The first claim pushed stands; a machine whose claim lost doesn't hand the attempt out.",
+  "type": "object",
+  "required": ["actor", "machine", "at"],
+  "additionalProperties": false,
+  "properties": {
+    "actor": {"description": "The tracker user who took it.", "type": "string", "minLength": 1},
+    "machine": {
+      "description": "The checkout that took it: an id kept in the home repo's git directory, so the same checkout knows its own claim.",
+      "type": "string",
+      "pattern": "^[0-9a-f]{32}$"
+    },
+    "at": {"description": "When, UTC (RFC 3339, whole seconds).", "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"}
+  }
+}

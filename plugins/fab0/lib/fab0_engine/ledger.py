@@ -1,5 +1,6 @@
-"""The ledger: one fact per attempt of a unit, and one per gate decision, written by `record` into the run store
-(D74), `ledger/<unit>-<attempt>[-gate].yaml` in the run's folder."""
+"""The ledger: one fact per attempt of a unit, one per gate decision, written by `record` into the run store
+(D74), and one per claim, written by `next` before it hands an attempt out (D81):
+`ledger/<unit>-<attempt>[-gate|-claim].yaml` in the run's folder."""
 
 from __future__ import annotations
 
@@ -17,6 +18,10 @@ ATTEMPT = re.compile(r"^(?P<unit>.+)-(?P<attempt>[1-9][0-9]*)$")
 def entry_name(unit: str, attempt: int, gate: bool = False) -> str:
     """A fact's name in the store: `<unit>-<attempt>`, or `<unit>-<attempt>-gate` for a gate decision."""
     return f"{unit}-{attempt}{'-gate' if gate else ''}"
+
+
+def claim_name(unit: str, attempt: int) -> str:
+    return f"{unit}-{attempt}-claim"
 
 
 def attempts(names, unit: str) -> list[int]:
@@ -40,7 +45,8 @@ def parse(raw: bytes | str, where: str) -> dict:
 
 
 def check(entry, where: str) -> dict:
-    errors = schema_errors(entry, core_schema("ledger-entry"))
+    """A ledger entry checked against its schema: a claim's (D81), by its name, or an attempt's or gate's."""
+    errors = schema_errors(entry, core_schema("claim" if where.endswith("-claim") else "ledger-entry"))
     if errors:
         raise Fail(EXIT_ERROR, f"invalid ledger entry {where}", errors=errors)
     return entry

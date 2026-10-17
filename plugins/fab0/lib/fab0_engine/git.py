@@ -131,8 +131,8 @@ def scope_diff(before: dict, after: dict) -> list[str]:
 
 
 class Writer:
-    """The few writes `apply` makes in a repository: merge one branch into another, make an empty commit,
-    create a branch, push. Branches that aren't checked out are changed through plumbing, so nobody's checkout moves;
+    """The few writes `apply` makes in a repository: merge one branch into another, make a commit, create a
+    branch, push. Branches that aren't checked out are changed through plumbing, so nobody's checkout moves;
     a branch that is checked out is changed in its checkout, and only when that checkout is clean."""
 
     def __init__(self, repo: Repo):
@@ -174,21 +174,6 @@ class Writer:
             raise Fail(EXIT_ERROR, f"{branch} is checked out with changes in {tree}; commit or stash them first")
         else:
             self.must("merge", "-q", "--ff-only", sha, cwd=tree)
-
-    def claim(self, branch: str, sha: str, who: str) -> bool:
-        """Create `branch` on the remote, only if nobody has: the claim that keeps two machines from running
-        one unit (D46). The branch starts with an empty commit naming who took it, so two claims never push the
-        same commit, which git would accept as already there. Without a remote, the local branch is the claim."""
-        tree = self.must("rev-parse", f"{sha}^{{tree}}")
-        mine = self.must("commit-tree", tree, "-p", sha, "-m", f"fab0: {who} takes {branch}")
-        if self.has_remote():
-            lease = f"--force-with-lease=refs/heads/{branch}:"  # an empty expected value: the branch must not exist
-            if self.git("push", "-q", lease, "origin", f"{mine}:refs/heads/{branch}").returncode:
-                return False
-        if not self.repo.ref_exists(branch):
-            self.must("branch", branch, mine)
-        self.repo._fresh.clear()
-        return True
 
     def create_branch(self, branch: str, start: str) -> None:
         self.must("branch", branch, start)

@@ -9,6 +9,7 @@ One call loops until nothing more can be done:
 - a unit reviewed in the runs repository (D80) gets its latest outputs on its review branch and a review pull
   request there; a person's edit on that branch is recorded as their attempt, and a merge by someone who isn't
   the gate's owner is said on the pull request once;
+- a run branch that got work since the run started gets its run pull request, if `onStart` opens them (D82);
 - what was recorded in the run store and not pushed yet is pushed (D74);
 - with `tracker.fields.signal` set, the run's item and its elements' items show their state on the board.
 
@@ -66,9 +67,8 @@ def perform(run: Run, unit: Unit) -> str:
                 )
         return f"merged the base into {run.run_branch}"
     if name in ("pr.open-run", "pr.ready"):
-        return run_pulls(
-            run, draft=bool(args.get("draft")) if name == "pr.open-run" else False, only_home=name == "pr.open-run"
-        )
+        opening = name == "pr.open-run"
+        return run_pulls(run, draft=bool(args.get("draft")) and opening, opening=opening)
     if name == "pr.merge":
         from .wiring import base_allowed
 
@@ -143,23 +143,21 @@ def sync_children(run: Run, unit: Unit, args: dict) -> str:
     return did + (f"; {', '.join(linked)}" if linked else "")
 
 
-def run_pulls(run: Run, draft: bool, only_home: bool) -> str:
-    """The run's pull requests: home's from the start, and every repository whose run branch has work."""
+def run_pulls(run: Run, draft: bool, opening: bool) -> str:
+    """The run's pull requests, in every repository whose run branch has work the base lacks (D82): a repository
+    the run never changed gets none. Each one closes the run's item. `opening` (`pr.open-run`) opens only where
+    there never was one, so a pull request a person closed stays closed until `pr.ready`."""
     from .actions import ahead
 
     done = []
     for repo in written(run):
-        if only_home and repo.name != "home":
-            continue
-        if not only_home and not ahead(repo, run):
+        if not ahead(repo, run):
             continue
         pr = run.tracker.pull(repo.github, run.run_branch, repo.base)
-        if pr is None or pr["state"] == "closed":
-            if not ahead(repo, run):  # GitHub refuses a pull request with nothing in it
-                Writer(repo).commit(run.run_branch, f"fab0: start run {run.run} ({run.name})", allow_empty=True)
+        if pr is None or pr["state"] == "closed" and not opening:
             Writer(repo).push(run.run_branch)
             title = f"{run.name} run {run.run}" + (f": {run.item()['title']}" if run.item() else "")
-            closes = f"\n\nCloses #{run.run}" if repo.name == "home" and run.item() else ""
+            closes = f"\n\nCloses {run.item_ref()}" if run.item() else ""
             number = run.tracker.create_pr(
                 repo.github,
                 run.run_branch,
@@ -238,13 +236,14 @@ def unit_pull(run: Run, unit: Unit) -> list[str]:
         unit.latest and unit.gates.get(unit.attempt, {}).get("gate", {}).get("decision") == "approve"
     )
     names = repos_of(run, unit)
-    done = []
+    done, shown = [], False
     for name in names:
         repo = run.repos[name]
         parent = run.parent_in(repo, unit.ctx.parent)
         head, base = repo.fresh(unit.branch), repo.fresh(parent)
         if not head or base and repo.is_ancestor(head, base):
             continue  # nothing on the branch to look at: GitHub opens no pull request without a change
+        shown = True
         Writer(repo).push(unit.branch)
         pr = run.tracker.pull(repo.github, unit.branch, parent)
         if pr is None or pr["state"] in ("closed", "merged"):  # merged at an older attempt: a new one
@@ -257,12 +256,19 @@ def unit_pull(run: Run, unit: Unit) -> list[str]:
             run.tracker.ready_pr(repo.github, pr["number"])
             done.append(f"marked {repo.github}#{pr['number']} ready")
         done += notes(run, unit, repo.github, pr["number"])
+    if not shown:
+        done += item_notes(run, unit)
     return done
 
 
+def item_notes(run: Run, unit: Unit) -> list[str]:
+    """A unit with no pull request (its attempt changed nothing) says where it waits on the run's item instead."""
+    return notes(run, unit, run.home.github, int(run.run)) if run.item() is not None else []
+
+
 def notes(run: Run, unit: Unit, github: str, number: int) -> list[str]:
-    """What a pull request must say about where its unit waits, each once: questions, an escalation, or a merge
-    by someone who isn't the gate's owner."""
+    """What a pull request, or the run's item, must say about where its unit waits, each once: questions, an
+    escalation, or a merge by someone who isn't the gate's owner."""
     reason = unit.reason or {}
     note = None
     if "questions" in reason:
@@ -304,6 +310,8 @@ def review_pull(run: Run, unit: Unit) -> list[str]:
     done = []
     if run.store.review(run.run, unit.id, files, f"{unit.id} attempt {attempt} (run {run.run})"):
         done.append(f"put attempt {attempt} on {branch}")
+    if run.store.review_head(run.run, unit.id) is None:  # nothing written yet, such as an attempt that only asks
+        return done + item_notes(run, unit)
     pr = run.tracker.pull(github, branch, "main")
     if pr is None or pr["state"] == "closed" or pr["state"] == "merged" and not run.holds_latest(unit):
         role = run.owner(unit)
@@ -318,6 +326,21 @@ def review_pull(run: Run, unit: Unit) -> list[str]:
         pr = {"number": number}
         done.append(f"opened {github}#{number}")
     return done + notes(run, unit, github, pr["number"])
+
+
+def open_runs(run: Run) -> list[dict]:
+    """A started run's `pr.open-run`, again: a run branch that got work since the run started gets its pull request
+    now (D82). Only `apply` does this, after its last round, and it reads nothing while no run branch has work."""
+    from .actions import ahead
+
+    if run.run_branch is None or not run.recorded() or not any(ahead(r, run) for r in written(run)):
+        return []
+    found = []
+    for unit in run.units:
+        if unit.lifecycle == "onStart" and unit.step["action"] == "pr.open-run":
+            if check(run, "pr.open-run", unit.step.get("with", {}), unit.ctx) is not None:
+                found.append({"unit": unit.id, "action": "pr.open-run", "did": perform(run, unit)})
+    return found
 
 
 def publish_store(run: Run) -> str | None:
@@ -421,6 +444,7 @@ def rounds(run: Run, only: str | None, applied: list[dict]) -> tuple[Run, dict]:
                 for did in (review_pull if run.store_reviewed(unit) else unit_pull)(run, unit):
                     applied.append({"unit": unit.id, "pull": did})
         if not progress:
+            applied += open_runs(run)
             pushed = publish_store(run)
             if pushed:
                 applied.append({"store": pushed})

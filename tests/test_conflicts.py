@@ -113,23 +113,35 @@ def remotes(f) -> None:
 def test_a_unit_claimed_on_another_machine_isnt_handed_out(story):
     remotes(story)
     story.run("apply", "412")
+    runs = story.repo("home").parent / "remotes" / "runs.git"
     other = story.repo("home").parent / "elsewhere"
-    git(story.repo("home").parent, "clone", "-q", str(story.repo("home").parent / "remotes" / "story.git"), str(other))
-    git(other, "push", "-q", "origin", "origin/fab0/412/base:refs/heads/fab0/412/spec")
+    git(story.repo("home").parent, "clone", "-q", str(runs), str(other))
+    git(other, "config", "user.email", "x@example.com")
+    git(other, "config", "user.name", "x")
+    claim = other / "runs" / "shop" / "412" / "ledger" / "spec-1-claim.yaml"
+    claim.parent.mkdir(parents=True)
+    claim.write_text(f"actor: be-user\nmachine: {'e' * 32}\nat: '2026-10-17T10:00:00Z'\n")
+    git(other, "add", "-A")
+    git(other, "commit", "-qm", "412: spec-1-claim")
+    git(other, "push", "-q", "origin", "HEAD:main")
     res = story.run("next", "412")
     assert states(res)["spec"] == ("running", {"claimed": "elsewhere"}) and res["handouts"] == []
-    git(story.repo("home"), "fetch", "-q", "origin")
-    res = story.run("next", "412")
-    assert states(res)["spec"] == ("running", {"claimed": "elsewhere"}), "from R7: also once the claim is fetched"
+    assert states(story.run("status", "412"))["spec"] == ("running", {"claimed": "elsewhere"}), "status says so too"
+    assert not git(story.repo("home"), "branch", "--list", "fab0/412/spec"), "no branch for a unit it didn't take"
 
 
-def test_next_claims_a_unit_on_the_remote(story):
+def test_next_claims_a_unit_in_the_run_store_and_makes_no_commit(story):
     remotes(story)
     story.run("apply", "412")
     res = story.run("next", "412")
     assert [h["unit"] for h in res["handouts"]] == ["spec"]
+    runs = story.repo("home").parent / "remotes" / "runs.git"
+    claim = git(runs, "show", "main:runs/shop/412/ledger/spec-1-claim.yaml")
+    assert "actor: po-user" in claim, "pushed before the hand-out (D81)"
+    home = story.repo("home")
+    assert git(home, "rev-parse", "fab0/412/spec") == git(home, "rev-parse", "fab0/412/base"), "no claim commit"
     remote = story.repo("home").parent / "remotes" / "story.git"
-    assert git(remote, "rev-parse", "--verify", "refs/heads/fab0/412/spec")
+    assert not git(remote, "branch", "--list", "fab0/412/spec"), "a branch with no work stays on this machine"
     assert handouts(story.run("next", "412"))["spec"], "the same machine keeps its claim"
 
 

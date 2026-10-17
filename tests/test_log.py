@@ -141,7 +141,7 @@ def test_follow_prints_the_events_a_session_writes(story):
     try:
         assert follower.next() == "run 412 has no events here yet"
         story.run("apply", "412")
-        got = [follower.next(5) for _ in range(3)]
+        got = [follower.next(5) for _ in range(2)]
         assert got == [shown(e) for e in events(story)]
         assert got[0].endswith("apply: onStart-1: git.run-branch: created fab0/412/base in home, backend")
         story.run("next", "412")

@@ -46,6 +46,7 @@ from __future__ import annotations
 import json
 import re
 import threading
+import uuid
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -58,7 +59,7 @@ from .claims import EVERYTHING, overlap
 from .git import Repo
 from .hashing import sha as content_sha
 from .hashing import sha_json
-from .ledger import ATTEMPT, attempts, entry_name, gate_attempts, seconds_between, took
+from .ledger import ATTEMPT, attempts, claim_name, entry_name, gate_attempts, seconds_between, took
 from .ledger import check as check_entry
 from .store import open_store
 from .templates import Unresolved
@@ -243,6 +244,22 @@ class Run:
     def pending_dir(self) -> Path:
         return self.home.common_dir() / "fab0" / "pending" / self.run  # shared by every checkout of home
 
+    def machine(self, create: bool = False) -> str | None:
+        """This checkout's id, kept in the home repo's git directory, which a claim names (D81). None when it has
+        none yet and `create` is false."""
+        path = self.home.common_dir() / "fab0" / "machine"
+        if not path.is_file():
+            if not create:
+                return None
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(uuid.uuid4().hex + "\n")
+        return path.read_text().strip()
+
+    def claimed_elsewhere(self, unit: Unit) -> bool:
+        """Another checkout claimed the attempt the unit would be handed out at."""
+        claim = self.facts().get(claim_name(unit.id, unit.attempt))
+        return claim is not None and claim["machine"] != self.machine()
+
     def owner(self, unit: Unit) -> str | None:
         """The role whose turn a unit is: its human gate's owner, the step's, or its repository's."""
         human = unit.gate.get("human") if isinstance(unit.gate, dict) else None
@@ -383,6 +400,9 @@ class Run:
         end = len(self.units)
         ended = self.walk_actions(self.p["onEnd"], "onEnd", "", ctx, steps, None if steps else {"order": "steps"})
         self.apply_tracker(self.units[end:])
+        for u in self.units:
+            if u.step and "action" not in u.step and u.state == "ready" and self.claimed_elsewhere(u):
+                u.state, u.reason = "running", {"claimed": "elsewhere"}
         self.apply_claims()
         self.apply_limits()
         out["units"] = [u.summary() for u in self.units]
