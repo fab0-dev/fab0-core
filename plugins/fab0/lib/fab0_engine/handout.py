@@ -11,9 +11,10 @@ import copy
 import json
 import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 
-from .artifacts import content_hash, input_hashes, read_disk, store_name, verify, view
+from .artifacts import content_hash, input_hashes, read_disk, store_name, store_view, verify, view
 from .claims import covers
 from .errors import EXIT_REFUSED, EXIT_USAGE, Fail
 from .git import scope_diff
@@ -81,10 +82,11 @@ def rework_lines(unit: Unit) -> list[str]:
     why = unit.rework or {}
     if not why:
         return []
+    where = "is on your branch" if unit.write else "is under Outputs below"
     lines = [
         "## Rework",
         "",
-        f"Attempt {unit.attempt - 1} is on your branch; build on it, and address all of this:",
+        f"Attempt {unit.attempt - 1} {where}; build on it, and address all of this:",
         "",
     ]
     if "stale" in why:
@@ -138,6 +140,8 @@ def brief(run: Run, unit: Unit, schema: dict, trees: dict[str, str], outbox: Pat
                 lines.append(f"- {name}: write `{path}` in `{trees.get(repo.name, repo.path)}`")
             elif art["kind"] == "store":
                 lines.append(f"- {name}: write `{store_name(name, art)}` in `{outbox}`, outside every repository")
+                if unit.rework and run.latest_object(name, unit.ctx):  # a store output is on no branch to build on
+                    lines += ["", f"  Its latest version, {store_view(run, name, unit.ctx).text}", ""]
             else:
                 lines.append(f"- {name}")
         lines.append("")
@@ -532,6 +536,62 @@ def record(run: Run, unit_id: str, returned: dict | None, exit_code: int | None)
         **({"outside": [str(workspace_root(run) / n) for n in outside]} if outside else {}),
         **pushed,
     }
+
+
+def record_edit(run: Run, unit: Unit, edit: dict) -> str:
+    """A person's edit of a unit's outputs on its review branch (D80), recorded as an attempt by that person: the
+    files are checked like an agent's outputs, and those that pass are the outputs' latest version. Returns what
+    was recorded."""
+    attempt = unit.history[-1]["attempt"] + 1
+    latest = unit.latest
+    entry: dict = {
+        "step": unit.step["step"],
+        "attempt": attempt,
+        "executor": "person",
+        "actor": edit["author"],
+        "branch": run.review_branch(unit),
+        "base": latest["base"],
+    }
+    if unit.element_id:
+        entry["unit"] = unit.element_id
+    if latest.get("inputs"):
+        entry["inputs"] = latest["inputs"]
+    entry["gate"] = {"type": "human"}
+    before = run.review_copies(unit)
+    changed = sorted(
+        n for n in before.keys() | edit["files"].keys() if before.get(n) != content_hash(edit["files"].get(n))
+    )
+    entry["summary"] = f"{edit['author']} edited {', '.join(changed)} on {edit.get('pr') or entry['branch']}."
+    entry["edited"] = {"commit": edit["commit"], **({"pr": edit["pr"]} if "pr" in edit else {})}
+    outputs, checks, objects = {}, {}, []
+    expected = set()
+    with tempfile.TemporaryDirectory(prefix="fab0-edit-") as tmp:
+        for file, data in edit["files"].items():
+            (Path(tmp) / file).parent.mkdir(parents=True, exist_ok=True)
+            (Path(tmp) / file).write_bytes(data)
+        for name in unit.step["outputs"]:
+            file = store_name(name, run.w.artifacts[name])
+            expected.add(file)
+            if file in edit["files"]:
+                outputs[name] = content_hash(edit["files"][file])
+                objects.append((edit["files"][file], file.rsplit(".", 1)[1]))
+            checks[name] = verify(run, name, unit.ctx, Path(tmp)) or "pass"
+    extra = sorted(set(edit["files"]) - expected)
+    if extra:
+        checks["review"] = [f"{n} in the review folder is no output of this step" for n in extra]
+    if outputs:
+        entry["outputs"] = outputs
+    entry["verify"] = checks
+    stamp = now()
+    entry |= {"started": stamp, "ended": stamp}
+    name = entry_name(unit.id, attempt)
+    check_entry(entry, name)
+    for content, ext in objects:
+        run.store.put(run.run, content, ext)
+    if run.store.append(run.run, name, entry) == "exists":
+        raise Fail(EXIT_REFUSED, f"{run.run}/{name} is in the ledger already; the ledger is append-only")
+    push(run)
+    return f"recorded {edit['author']}'s edit as attempt {attempt}"
 
 
 def local_paths_out(text: str, trees: dict[str, Path]) -> str:

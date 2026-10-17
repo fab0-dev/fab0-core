@@ -15,6 +15,11 @@ gives every unit a state:
 - `done`: the commits its latest attempt recorded are in the branch it merges into; an attempt that committed
   nothing is done when its gate passes; for an action, its check passes.
 
+A step with a `human` gate whose outputs are all store artifacts, and which writes no repository, is reviewed in
+the runs repository (D80): its review pull request carries readable copies of its outputs. Merging it is the
+approval only when the person who merged holds the gate's owner role, and only for the latest attempt's outputs.
+A person's edit on the review branch becomes an attempt of that person (`apply` records it).
+
 Actions (the pipeline's and its blocks' `onStart` and `onEnd`, and action steps) are units too. An action is
 done when its check passes: its result is a fact in git or the tracker, so it writes no ledger entry (D37).
 
@@ -48,9 +53,10 @@ from pathlib import Path
 import yaml
 
 from .actions import check, element_items
-from .artifacts import input_hashes
+from .artifacts import input_hashes, store_name
 from .claims import EVERYTHING, overlap
 from .git import Repo
+from .hashing import sha as content_sha
 from .hashing import sha_json
 from .ledger import ATTEMPT, attempts, entry_name, gate_attempts, seconds_between, took
 from .ledger import check as check_entry
@@ -236,6 +242,99 @@ class Run:
 
     def pending_dir(self) -> Path:
         return self.home.common_dir() / "fab0" / "pending" / self.run  # shared by every checkout of home
+
+    def owner(self, unit: Unit) -> str | None:
+        """The role whose turn a unit is: its human gate's owner, the step's, or its repository's."""
+        human = unit.gate.get("human") if isinstance(unit.gate, dict) else None
+        if isinstance(human, dict) and human.get("owner"):
+            return human["owner"]
+        if unit.step and unit.step.get("owner") not in (None, "repo-owner"):
+            return unit.step["owner"]
+        return self.w.project["repos"].get(unit.pr_repo, {}).get("owner")
+
+    # ------------------------------------------------------------ review pull requests (D80)
+
+    def store_github(self) -> str | None:
+        """The runs repository on GitHub, where review pull requests are."""
+        return self.w.project.get("store", {}).get("github")
+
+    def store_reviewed(self, unit: Unit) -> bool:
+        """A person reviews the unit's work in the runs repository: a step with a human gate decided by a pull
+        request, whose outputs are all store artifacts, and which writes no repository."""
+        step, gate = unit.step, unit.gate
+        if self.store is None or not step or "action" in step or step.get("repos", {}).get("write"):
+            return False
+        human = gate == "human" or isinstance(gate, dict) and "human" in gate
+        via = gate["human"].get("via") if isinstance(gate, dict) and isinstance(gate.get("human"), dict) else None
+        outputs = step.get("outputs", [])
+        return (
+            human and via != "label" and bool(outputs) and all(self.w.artifacts[n]["kind"] == "store" for n in outputs)
+        )
+
+    def review_branch(self, unit: Unit) -> str:
+        return self.store.review_branch(self.run, unit.id)
+
+    def review_pulls(self, unit: Unit) -> list[dict]:
+        """The unit's review pull requests, oldest first."""
+        github = self.store_github()
+        if github is None or self.tracker is None:
+            return []
+        return self.tracker.pulls(github, self.review_branch(unit), "main")
+
+    def review_copies(self, unit: Unit) -> dict[str, str]:
+        """The review folder's files as the latest attempt has them, by hash."""
+        outputs = (unit.latest or {}).get("outputs", {})
+        return {store_name(n, self.w.artifacts[n]): h for n, h in outputs.items() if n in unit.step.get("outputs", [])}
+
+    def holds_latest(self, unit: Unit, at: str | None = None) -> bool:
+        """The review folder holds the latest attempt's outputs: at commit `at`, else on the store's main."""
+        found = self.store.review_files(self.run, unit.id, at)
+        return {n: content_sha(data) for n, data in found.items()} == self.review_copies(unit)
+
+    def owners(self, unit: Unit) -> list[str] | None:
+        """The logins of the gate's owner role; None when the unit has no owner role, so no merge is refused."""
+        role = self.owner(unit)
+        return None if role is None else list(self.w.people.get(role, {}).get("github", []))
+
+    def review_state(self, unit: Unit) -> tuple[str, dict | None]:
+        """Done when the latest merged review pull request brought the latest attempt's outputs into main, and an
+        owner merged it, or approved it after someone else did. A merge by anyone else is reported, and waits."""
+        merged = [p for p in self.review_pulls(unit) if p["state"] == "merged"]
+        if not merged or not self.holds_latest(unit):
+            return "waiting", {"gate": "human"}
+        last, owners = merged[-1], self.owners(unit)
+        approvals = [
+            r["user"] for r in self.tracker.reviews(self.store_github(), last["number"]) if r["state"] == "APPROVED"
+        ]
+        if owners is None or last.get("merged_by") in owners or set(approvals) & set(owners):
+            return "done", None
+        who = last.get("merged_by") or "someone"
+        return "waiting", {"gate": "human", "merged": f"by {who}, who isn't {self.owner(unit)}"}
+
+    def review_edit(self, unit: Unit) -> dict | None:
+        """A person's commit on the unit's review branch that changed its outputs and isn't recorded yet: the
+        commit, its author and the files. fab0's own commits, and the commits recorded as edits, aren't."""
+        if not self.store_reviewed(unit) or unit.latest is None:
+            return None
+        head = self.store.review_head(self.run, unit.id)
+        if (
+            head is None
+            or self.store.by_fab0(head)
+            or any((e.get("edited") or {}).get("commit") == head for e in unit.history)
+        ):
+            return None
+        if self.holds_latest(unit, head):
+            return None
+        pulls = self.review_pulls(unit)
+        author = pulls[-1].get("author") if pulls and pulls[-1].get("head") in (None, head) else None
+        out = {
+            "commit": head,
+            "author": author or self.store.author(head),
+            "files": self.store.review_files(self.run, unit.id, head),
+        }
+        if pulls:
+            out["pr"] = f"{self.store_github()}#{pulls[-1]['number']}"
+        return out
 
     # ------------------------------------------------------------ the walk
 
@@ -863,7 +962,10 @@ class Run:
 
     def pull_merged(self, unit: Unit) -> bool:
         """GitHub reports the unit's pull request merged at the commits its latest attempt recorded, in every
-        repository it committed to, though they aren't in its parent: a person squashed or rebased it."""
+        repository it committed to, though they aren't in its parent: a person squashed or rebased it. For a unit
+        reviewed in the runs repository, its review pull request merged as the gate asks."""
+        if self.store_reviewed(unit):
+            return unit.latest is not None and self.review_state(unit)[0] == "done"
         heads = (unit.latest or {}).get("heads") or {}
         if not heads or not unit.branch or self.tracker is None:
             return False
@@ -949,6 +1051,9 @@ class Run:
             if decision == "escalate":
                 unit.state, unit.reason = "waiting", {"escalated": "the gate escalated"}
                 return
+        if self.store_reviewed(unit):
+            unit.state, unit.reason = self.review_state(unit)
+            return
         labelled = self.labelled(unit)
         if not entry.get("heads"):  # nothing to merge: the gate is the decision
             human = (unit.gate == "human" or isinstance(unit.gate, dict) and "human" in unit.gate) and not labelled

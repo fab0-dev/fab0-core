@@ -146,7 +146,7 @@ def test_a_pull_request_comes_with_its_reviews_and_comments(story):
     story.reset_calls()
     tracker = Memo(GhFake(str(story.gh_path)))
     [pull] = tracker.pulls("acme/shop-api", "fab0/412/implement-T1", "fab0/412/base")
-    assert set(pull) == {"number", "state", "draft", "head", "body"}
+    assert set(pull) == {"number", "state", "draft", "head", "merged_by", "author", "body"}
     assert tracker.reviews("acme/shop-api", pull["number"]) == [REVIEW]
     assert [c["body"] for c in tracker.comments("acme/shop-api", pull["number"])] == ["Hi"]
     assert [c["method"] for c in story.calls()] == ["pulls"]
@@ -508,6 +508,8 @@ def test_the_adapter_reads_a_pull_request_with_its_reviews_and_comments_in_one_r
             "isDraft": draft,
             "body": "B",
             "headRepository": {"nameWithOwner": repo},
+            "mergedBy": {"login": "po-user", "__typename": "User"} if state == "MERGED" else None,
+            "commits": {"nodes": [{"commit": {"author": {"user": {"login": "be-user"}}}}]},
             "reviews": {
                 "nodes": [
                     {"databaseId": 4, "state": "APPROVED", "body": None, "submittedAt": "t1", "author": {"login": "a"}}
@@ -529,6 +531,7 @@ def test_the_adapter_reads_a_pull_request_with_its_reviews_and_comments_in_one_r
         (3, "merged", False, "B"),
         (7, "open", True, "B"),
     ], "oldest first, from a fork left out"
+    assert [(p["merged_by"], p["author"]) for p in found] == [("po-user", "be-user"), (None, "be-user")]
     assert tracker.reviews("o/r", 7) == [{"id": 4, "state": "APPROVED", "body": "", "user": "a", "at": "t1"}]
     assert tracker.comments("o/r", 7) == [
         {"id": 5, "body": "c", "user": None, "at": "t2"},
