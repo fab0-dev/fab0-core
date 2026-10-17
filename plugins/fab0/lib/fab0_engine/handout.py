@@ -14,12 +14,14 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+import yaml
+
 from .artifacts import content_hash, input_hashes, read_disk, store_name, store_view, verify, view
 from .claims import covers
 from .errors import EXIT_REFUSED, EXIT_USAGE, Fail
 from .git import scope_diff
 from .ledger import check as check_entry
-from .ledger import entry_name, now, timing
+from .ledger import claim_name, entry_name, now, timing
 from .schedule import Run, Unit
 from .schemas import core_schema, load_schema, resolve_schema_ref, schema_errors
 from .templates import Unresolved, render
@@ -291,24 +293,26 @@ def outbox_of(run: Run, unit: str, attempt: int) -> Path:
 
 
 def claim(run: Run, unit: Unit) -> bool:
-    """Claim a unit that starts now by creating its branch, on the remote first (D46). False: someone else has."""
-    from .git import Writer
-
-    if unit.state != "ready":
-        return True
-    for name in dict.fromkeys(unit.write or [unit.pr_repo]):
-        repo = run.repos[name]
-        parent = repo.fresh(run.parent_in(repo, unit.ctx.parent))
-        if repo.fresh(unit.branch):
-            if unit.latest is None:
-                # a first attempt whose branch exists, with no hand-out here (it would be `running`): another
-                # machine claimed it, and this one fetched the claim (from R7)
-                return False
-            continue  # a rework's branch is the unit's already
-        if parent is None:
-            continue  # a parent that doesn't exist yet is the session's
-        if not Writer(repo).claim(unit.branch, repo.sha(parent), run.actor or "fab0"):
+    """Take the attempt `unit` is about to be handed out at with a claim fact in the run store, pushed before the
+    hand-out (D81): False when another checkout's claim stands, here or on the remote. Then the unit's branch is
+    created from its parent's head, with no commit, where it doesn't exist yet."""
+    name = claim_name(unit.id, unit.attempt)
+    mine = run.machine(create=True)
+    if run.store.append(run.run, name, {"actor": run.actor or "fab0", "machine": mine, "at": now()}) == "exists":
+        if (yaml.safe_load(run.store.fact_path(run.run, name).read_text()) or {}).get("machine") != mine:
             return False
+    try:
+        lost = run.store.sync("push")
+    except Fail:
+        return False  # not pushed, so not taken: the next `next` pushes it, or finds another checkout's
+    if (run.run, name) in lost:
+        return False
+    for repo_name in dict.fromkeys(unit.write or [unit.pr_repo]):
+        repo = run.repos[repo_name]
+        parent = repo.fresh(run.parent_in(repo, unit.ctx.parent))
+        if parent is not None and not repo.fresh(unit.branch):
+            repo.out("branch", unit.branch, repo.sha(parent))  # a parent that doesn't exist yet is the session's
+            repo._fresh.clear()
     return True
 
 
@@ -504,6 +508,7 @@ def record(run: Run, unit_id: str, returned: dict | None, exit_code: int | None)
     heads = commit_work(trees, pending["starts"], message)
     if heads:
         entry["heads"] = heads
+    unpushed = push_branches(run, pending["branch"], heads)
     for content, ext in objects:  # the versions first, then the entry that names them
         run.store.put(run.run, content, ext)
     run.store.append(run.run, name, entry)
@@ -535,6 +540,7 @@ def record(run: Run, unit_id: str, returned: dict | None, exit_code: int | None)
         "line": line,
         **({"outside": [str(workspace_root(run) / n) for n in outside]} if outside else {}),
         **pushed,
+        **({"unpushed_branches": unpushed} if unpushed else {}),
     }
 
 
@@ -604,8 +610,7 @@ def local_paths_out(text: str, trees: dict[str, Path]) -> str:
 
 def commit_work(trees: dict[str, Path], starts: dict, message: str) -> dict[str, str]:
     """Commit what the unit changed in each worktree, concluding a merge the session started. Returns, per
-    repository, the commit its branch is at, when the branch's content differs from its parent's at the hand-out:
-    an empty commit, such as a claim, isn't work to merge."""
+    repository, the commit its branch is at, when the branch has commits its parent lacked at the hand-out."""
     heads = {}
     for name, tree in sorted(trees.items()):
 
@@ -620,9 +625,24 @@ def commit_work(trees: dict[str, Path], starts: dict, message: str) -> dict[str,
                 raise Fail(EXIT_REFUSED, f"the commit in {tree} failed: {done.stderr.strip()}")
         head = git("rev-parse", "HEAD").stdout.strip()
         start = starts.get(name, {}).get("sha")
-        if head and (not start or git("diff", "--quiet", start, head).returncode):
+        if head and (not start or git("merge-base", "--is-ancestor", head, start).returncode):
             heads[name] = head
     return heads
+
+
+def push_branches(run: Run, branch: str, heads: dict[str, str]) -> list[str]:
+    """Push the unit's branch in each repository it committed to: a branch with no commits of its own stays on this
+    machine (D81). A push that fails is said, not fatal: `apply` pushes the branch before it merges it or opens its
+    pull request. Returns the repositories it couldn't push to."""
+    from .git import Writer
+
+    failed = []
+    for name in sorted(heads):
+        try:
+            Writer(run.repos[name]).push(branch)
+        except Fail:
+            failed.append(name)
+    return failed
 
 
 def push(run: Run) -> dict:

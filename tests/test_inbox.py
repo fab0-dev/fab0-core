@@ -25,7 +25,7 @@ def test_a_human_gate_is_in_its_owners_inbox_and_waits_for_the_others(story):
             "unit": "spec",
             "reason": {"gate": "human"},
             "owner": "product-owner",
-            "pull": "acme/shop#2",
+            "pull": "acme/shop#1",
         }
     ]
     assert mine["ready"] == [] and mine["waiting"] == []

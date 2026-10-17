@@ -61,7 +61,7 @@ def test_next_apply_gives_what_apply_gives_and_what_next_gives_after_it(story, t
     combined = story.run("next", "412", "--apply")
     applied = other.run("apply", "412")
     after = other.run("next", "412")
-    assert [a["action"] for a in combined["applied"]] == ["git.run-branch", "pr.open-run", "tracker.field"]
+    assert [a["action"] for a in combined["applied"]] == ["git.run-branch", "tracker.field"]
     assert scrub(combined["applied"], story.home.parent) == scrub(applied["applied"], other.home.parent)
     assert [h["unit"] for h in combined["handouts"]] == ["spec"], "something was due, and a unit is ready"
     assert scrub(combined["handouts"], story.home.parent) == scrub(after["handouts"], other.home.parent)
@@ -94,8 +94,9 @@ def quiet_round(f) -> tuple[list[dict], list[dict], dict, dict]:
 def test_a_quiet_round_costs_one_tracker_call_more_than_status(story):
     two_task_run(story)
     asked, round_, status, res = quiet_round(story)
-    extra = [m for m, a in tuples(round_) if (m, a) not in tuples(asked)]
-    assert extra == ["user"] and len(round_) == len(asked) + 1, "who is running"
+    extra = [(m, a) for m, a in tuples(round_) if (m, a) not in tuples(asked)]
+    run_pulls = [("pulls", ["acme/shop", "fab0/412/base", "main"])]  # apply's run pull requests, as a branch has work
+    assert extra == [("user", []), *run_pulls] and len(round_) == len(asked) + 2, "who is running"
     assert states(res) == states(status)
 
 

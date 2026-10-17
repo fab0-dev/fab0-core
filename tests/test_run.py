@@ -110,8 +110,8 @@ def test_a_run_starts_with_its_onstart_actions(story):
     story.branch("home", "fab0/412/base", "main")
     story.branch("backend", "fab0/412/base", "main")
     res = story.run("next", "412")
-    assert actions(res)["onStart-2"] == ("pr.open-run", "ready", {"missing": "home: no pull request"})
-    start_story(story)  # the pull request and the field too; the branches are already there
+    assert actions(res)["onStart-2"] == ("pr.open-run", "done", None), "no run branch has work yet (D82)"
+    start_story(story)  # the field too; the branches are already there
     res = story.run("status", "412")
     assert actions(res) == {
         "onStart-1": ("git.run-branch", "done", None),
@@ -372,9 +372,8 @@ def test_a_run_without_files_records_into_the_run_store(factory):
     res = finish(f, "7", h, trees, returned={"summary": "Billing.", "data": {"severity": "high", "area": "billing"}})
     assert "heads" not in res["recorded"], "it changed nothing, so there is nothing to merge"
     assert f.fact("7", "classify-1")["data"] == {"severity": "high", "area": "billing"}
-    assert (
-        git(f.repo("home"), "log", "--format=%s", "main..fab0/7/classify") == "fab0: support-user takes fab0/7/classify"
-    )
+    assert git(f.repo("home"), "rev-parse", "fab0/7/classify") == git(f.repo("home"), "rev-parse", "main"), "no commit"
+    assert f.fact("7", "classify-1-claim")["actor"] == "support-user", "the claim is a fact in the run store (D81)"
     s = states(f.run("status", "7"))
     assert s["classify"] == ("waiting", {"gate": "gate"}), "its auto gate decides from step R2d"
     assert s["label"] == ("blocked", {"order": "classify"})

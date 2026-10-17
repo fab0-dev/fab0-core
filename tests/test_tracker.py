@@ -265,7 +265,8 @@ def test_an_item_that_is_not_on_the_board_yet_is_added_first(story):
         ("add_to_board", 501),
         ("set_field", "acme/shop#501"),
     ]
-    assert [c["method"] for c in reads(calls)] == ["user", "item", "item", "board"], "nothing more for the extra write"
+    own = [c["method"] for c in reads(calls) if c["args"][1:2] != ["fab0/412/base"]]  # past apply's run pull requests
+    assert own == ["user", "item", "item", "board"], "nothing more for the extra write"
     assert [c["args"][2] for c in calls if c["method"] == "item"] == [False, True], "board entries when first needed"
     assert gh(story)["issues"]["acme/shop#501"]["fields"] == {"Signal": "blocked: implement-T2 (order T1)"}
 
