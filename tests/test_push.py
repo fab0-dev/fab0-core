@@ -4,7 +4,6 @@ import subprocess
 from pathlib import Path
 
 import pytest
-
 from conftest import git
 from fab0_engine.errors import Fail
 from fab0_engine.git import Repo, Writer
@@ -97,10 +96,14 @@ def test_s7_checkout_with_changes_is_left_alone(world):
     old = git(local, "rev-parse", "HEAD")
     new = ahead_on_origin(local, other)
     (local / "a").write_text("edited")
+    (local / "staged").write_text("s")
+    git(local, "add", "staged")
+    index = git(local, "diff", "--cached", "--name-status")
     writer.push("feat")
+    assert git(local, "diff", "--cached", "--name-status") == index == "A\tstaged"
     assert git(local, "rev-parse", "HEAD") == old
     assert (local / "a").read_text() == "edited"
-    assert git(local, "status", "--porcelain") == "M a"
+    assert git(local, "status", "--porcelain") == "M a\nA  staged"
     assert git(bare, "rev-parse", "feat") == new
 
 
